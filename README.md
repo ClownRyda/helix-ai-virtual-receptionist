@@ -1,8 +1,10 @@
-# PBX AI Voice Assistant
+# Helix AI Virtual Receptionist
 
 A fully local AI-powered virtual receptionist built on:
+
 - **Asterisk** (PBX, SIP, ARI)
 - **faster-whisper** (local STT)
+- **Silero VAD** (neural voice activity detection)
 - **Ollama + Qwen3 8B** (local LLM intent/conversation)
 - **Piper TTS** (local neural voice)
 - **Google Calendar** (scheduling)
@@ -15,17 +17,18 @@ A fully local AI-powered virtual receptionist built on:
 ```
 Caller → SIP Trunk → Asterisk (PJSIP + ARI)
                           │
-                          │ ARI WebSocket + ExternalMedia RTP
+              ARI WebSocket + ExternalMedia RTP
                           ▼
-                    Python Agent (FastAPI)
-                    ├── faster-whisper (STT)
-                    ├── Ollama / Qwen3 8B (intent + conversation)
-                    ├── Piper TTS (voice)
-                    └── Google Calendar (scheduling)
+              Python Agent (FastAPI)
+              ├── Silero VAD (speech detection)
+              ├── faster-whisper (STT)
+              ├── Ollama / Qwen3 8B (intent + conversation)
+              ├── Piper TTS (voice)
+              └── Google Calendar (scheduling)
                           │
-                          │ REST API
+                       REST API
                           ▼
-                    React Dashboard (port 3000)
+              React Dashboard (port 3000)
 ```
 
 ## Call Flow
@@ -33,11 +36,12 @@ Caller → SIP Trunk → Asterisk (PJSIP + ARI)
 1. Caller dials in → Asterisk answers → `Stasis(pbx-agent)` fires
 2. ARI agent creates mixing bridge + ExternalMedia RTP channel
 3. Agent greets caller (Piper TTS → RTP)
-4. Caller speaks → RTP audio → Whisper transcribes
-5. Transcript → Ollama detects intent
-6. **If schedule**: query Google Calendar → offer slots → book event
-7. **If transfer**: look up routing rules → redirect to extension via ARI
-8. All calls logged with full transcript to SQLite DB
+4. Caller speaks → RTP audio → Silero VAD detects speech boundaries
+5. VAD-segmented audio → Whisper transcribes
+6. Transcript → Ollama detects intent
+7. **If schedule**: query Google Calendar → offer slots → book event
+8. **If transfer**: look up routing rules → redirect to extension via ARI
+9. All calls logged with full transcript to SQLite DB
 
 ---
 
@@ -56,14 +60,17 @@ nano agent/.env  # Set your Asterisk, Google Calendar, business settings
 ```
 
 ### 3. Asterisk config
+
 Copy `asterisk/etc/asterisk/` configs to your Asterisk server (or use Docker):
-```bash
+
+```
 # Edit pjsip.conf with your SIP provider credentials and extensions
 # The defaults work for local testing with a softphone
 ```
 
 ### 4. Google Calendar OAuth
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a project → Enable Google Calendar API
 3. Create OAuth 2.0 credentials (Desktop app)
 4. Download `credentials.json` → place in `agent/`
@@ -82,10 +89,8 @@ docker exec pbx-ollama ollama pull qwen3:8b
 ```bash
 # Terminal 1: Asterisk (must already be installed)
 sudo asterisk -f -vvv
-
 # Terminal 2: Ollama
 ollama serve
-
 # Terminal 3: Python agent + API
 cd agent && python main.py
 ```
@@ -110,6 +115,14 @@ All settings in `agent/.env`:
 | `BUSINESS_HOURS_START` | `9` | Business open hour (24h) |
 | `BUSINESS_HOURS_END` | `17` | Business close hour (24h) |
 | `GOOGLE_CALENDAR_ID` | `primary` | Calendar to use for scheduling |
+
+### Silero VAD Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `VAD_THRESHOLD` | `0.5` | Speech probability threshold (0.0–1.0). Raise to 0.6–0.7 in noisy environments |
+| `VAD_MIN_SILENCE_MS` | `600` | Milliseconds of silence after speech before end-of-utterance |
+| `VAD_SPEECH_PAD_MS` | `100` | Padding (ms) added to start/end of speech segments |
 
 ---
 
@@ -145,18 +158,18 @@ To test with a softphone (Zoiper, Linphone, etc.):
 ```
 pbx-assistant/
 ├── asterisk/
-│   └── etc/asterisk/       # All Asterisk config files
-│       ├── pjsip.conf       # SIP trunks + extensions
-│       ├── extensions.conf  # Dialplan
-│       ├── ari.conf         # ARI credentials
-│       ├── http.conf        # ARI HTTP server
-│       └── rtp.conf         # RTP port range
+│   └── etc/asterisk/          # All Asterisk config files
+│       ├── pjsip.conf          # SIP trunks + extensions
+│       ├── extensions.conf     # Dialplan
+│       ├── ari.conf            # ARI credentials
+│       ├── http.conf           # ARI HTTP server
+│       └── rtp.conf            # RTP port range
 ├── agent/
-│   ├── main.py              # Entry point (FastAPI + ARI agent)
-│   ├── ari_agent.py         # Core ARI event loop + call handler
-│   ├── api.py               # REST API for dashboard
-│   ├── config.py            # Pydantic settings
-│   ├── database.py          # SQLAlchemy models
+│   ├── main.py                 # Entry point (FastAPI + ARI agent)
+│   ├── ari_agent.py            # Core ARI event loop + call handler
+│   ├── api.py                  # REST API for dashboard
+│   ├── config.py               # Pydantic settings
+│   ├── database.py             # SQLAlchemy models
 │   ├── stt/
 │   │   └── whisper_engine.py
 │   ├── tts/
@@ -165,9 +178,12 @@ pbx-assistant/
 │   │   └── intent_engine.py
 │   ├── calendar/
 │   │   └── gcal.py
-│   └── routing/
-│       └── router.py
-├── dashboard/               # React management UI (next step)
+│   ├── routing/
+│   │   └── router.py
+│   └── vad/                    # Voice Activity Detection
+│       ├── __init__.py
+│       └── silero_engine.py    # Silero VAD (replaces RMS energy threshold)
+├── dashboard/                  # React management UI
 ├── docker/
 │   ├── Dockerfile.agent
 │   └── Dockerfile.asterisk
@@ -184,6 +200,7 @@ Given your hardware (RTX 3080 10GB or MacBook Air M5 32GB):
 
 | Use case | Model | VRAM |
 |---|---|---|
+| VAD | Silero VAD (2MB) | CPU only (<1 GB) |
 | STT | `faster-whisper base.en` | ~1 GB |
 | Intent + conversation | `qwen3:8b` | ~5 GB |
 | TTS | Piper (CPU, <100MB) | CPU only |
@@ -191,3 +208,22 @@ Given your hardware (RTX 3080 10GB or MacBook Air M5 32GB):
 Total GPU usage: ~6 GB — fits comfortably on the 3080 with headroom.
 
 For better conversation quality, try `qwen3:14b` (needs ~9 GB) or `mistral-nemo:12b`.
+
+---
+
+## Changelog
+
+### v0.2 — Silero VAD (2026-04-10)
+- Replaced RMS energy VAD with Silero neural network VAD (`agent/vad/silero_engine.py`)
+- Added `SileroVADEngine` wrapping `FixedVADIterator` for accurate speech boundary detection
+- New env vars: `VAD_THRESHOLD`, `VAD_MIN_SILENCE_MS`, `VAD_SPEECH_PAD_MS`
+- Added `torch`/`torchaudio` to `requirements.txt`
+- Removed unused `rms_energy()` helper
+- Silero VAD processes 30ms audio chunks; uses hysteresis (threshold - 0.15) to prevent rapid toggling
+
+### v0.1 — Initial Release
+- Asterisk PBX + ARI integration
+- faster-whisper STT, Ollama LLM, Piper TTS
+- Google Calendar scheduling
+- React dashboard
+- Docker Compose deployment
