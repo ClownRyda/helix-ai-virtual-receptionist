@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     # Defaults to agent_rtp_host when not set.
     agent_rtp_advertise_host: str = Field("", env="AGENT_RTP_ADVERTISE_HOST")
 
+    # ── Silero VAD ──────────────────────────────────────────────
+    vad_threshold: float = Field(0.5, env="VAD_THRESHOLD")
+    # Speech probability above this → SPEECH.  0.5 works well for most cases.
+    # Raise to 0.6-0.7 in noisy environments to reduce false positives.
+    vad_min_silence_ms: int = Field(600, env="VAD_MIN_SILENCE_MS")
+    # Milliseconds of silence after speech before we consider the utterance done.
+    # 600 ms is a good balance — short enough for responsive turn-taking,
+    # long enough to survive brief pauses mid-sentence.
+    vad_speech_pad_ms: int = Field(100, env="VAD_SPEECH_PAD_MS")
+    # Padding added to start/end of detected speech segments (captures soft onsets).
+
     # ── Whisper STT ─────────────────────────────────────────────
     whisper_model: str = Field("base.en", env="WHISPER_MODEL")
     # Options: tiny.en, base.en, small.en, medium.en, large-v3

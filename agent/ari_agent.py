@@ -4,7 +4,7 @@ ARI Agent — core call handler.
 Flow:
   1. Asterisk fires StasisStart → we create a mixing bridge + ExternalMedia channel
   2. Raw slin16 RTP flows bidirectionally between Asterisk and our UDP socket
-  3. We buffer audio, run VAD silence detection, send chunks to Whisper
+  3. We buffer audio, run Silero VAD for speech detection, send chunks to Whisper
   4. Transcript → Ollama intent detection
   5. Ollama generates spoken response → Piper TTS → RTP back to caller
   6. Based on intent:
@@ -26,6 +26,7 @@ from llm.intent_engine import detect_intent, generate_response, ConversationStat
 from calendar.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
 from routing.router import get_extension_for_intent
 from database import AsyncSessionLocal, CallLog
+from vad import SileroVADEngine
 
 log = structlog.get_logger(__name__)
 
@@ -35,7 +36,6 @@ SAMPLE_RATE = 16000           # slin16
 FRAME_MS = 20                 # 20ms frames
 SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_MS // 1000  # 320
 BYTES_PER_FRAME = SAMPLES_PER_FRAME * 2             # 640 bytes (PCM16)
-SILENCE_THRESHOLD_MS = 800   # End of utterance after 800ms silence
 MAX_UTTERANCE_SECONDS = 15   # Max recording per turn
 
 
@@ -183,6 +183,11 @@ class CallHandler:
         self.transcript_log: list[str] = []
         self.available_slots: list[dict] = []
         self.started_at = datetime.utcnow()
+        self.vad = SileroVADEngine(
+            threshold=settings.vad_threshold,
+            min_silence_ms=settings.vad_min_silence_ms,
+            speech_pad_ms=settings.vad_speech_pad_ms,
+        )
 
     async def run(self):
         log.info("Call started", call_id=self.call_id, caller=self.caller_id)
@@ -380,15 +385,29 @@ class CallHandler:
 
     async def _listen(self) -> str:
         """
-        Read audio from the RTP socket until silence detected.
-        Returns transcribed text.
+        Read audio from the RTP socket until Silero VAD detects end-of-speech.
+
+        Flow:
+          1. Receive RTP packets, strip header, accumulate PCM payload.
+          2. Feed each payload chunk to SileroVADEngine.process_chunk().
+          3. On {"start": ...}  → caller began speaking; start recording.
+          4. On {"end": ...}   → caller stopped; break and transcribe.
+          5. Safety valve: MAX_UTTERANCE_SECONDS hard cap.
+
+        Returns transcribed text, or "" if nothing was captured.
         """
         audio_buffer = bytearray()
-        silence_frames = 0
-        silence_limit = int(SILENCE_THRESHOLD_MS / FRAME_MS)
+        speech_started = False
         max_frames = int(MAX_UTTERANCE_SECONDS * 1000 / FRAME_MS)
         total_frames = 0
+        no_data_count = 0
+        # Allow up to 5 seconds of pure silence before giving up
+        # (caller may have hung up or isn't speaking yet).
+        max_initial_silence_frames = int(5000 / FRAME_MS)  # 250 frames @ 20ms
         loop = asyncio.get_event_loop()
+
+        # Reset VAD state for this new listening turn
+        self.vad.reset()
 
         while total_frames < max_frames:
             try:
@@ -397,23 +416,29 @@ class CallHandler:
                     lambda: _recv_nonblocking(self.rtp_sock.sock, 2048)
                 )
                 if data and len(data) > RTP_HEADER_SIZE:
-                    # Update Asterisk address from incoming packets
-                    # (ExternalMedia sends from Asterisk's RTP port)
                     payload = data[RTP_HEADER_SIZE:]
-                    audio_buffer.extend(payload)
+                    no_data_count = 0
 
-                    # Simple energy-based VAD
-                    energy = _rms_energy(payload)
-                    if energy < 200:  # Silence threshold
-                        silence_frames += 1
-                        if silence_frames >= silence_limit and len(audio_buffer) > BYTES_PER_FRAME * 5:
-                            break
-                    else:
-                        silence_frames = 0
+                    # Feed to Silero VAD
+                    vad_event = self.vad.process_chunk(payload)
+
+                    if vad_event and "start" in vad_event:
+                        speech_started = True
+                        log.debug("VAD: speech start", call_id=self.call_id)
+
+                    # Only record audio once speech has been detected
+                    if speech_started:
+                        audio_buffer.extend(payload)
+
+                    if vad_event and "end" in vad_event and speech_started:
+                        log.debug("VAD: speech end", call_id=self.call_id,
+                                  audio_bytes=len(audio_buffer))
+                        break
                 else:
                     await asyncio.sleep(0.02)
-                    silence_frames += 1
-                    if silence_frames >= silence_limit * 2:
+                    no_data_count += 1
+                    # If we never got speech and silence is long, give up
+                    if not speech_started and no_data_count >= max_initial_silence_frames:
                         break
 
             except Exception:
@@ -421,6 +446,7 @@ class CallHandler:
 
             total_frames += 1
 
+        # Need a minimum amount of audio to attempt transcription
         if len(audio_buffer) < BYTES_PER_FRAME * 5:
             return ""
 
@@ -504,16 +530,6 @@ def _recv_nonblocking(sock: socket.socket, size: int) -> bytes | None:
     except BlockingIOError:
         return None
 
-
-def _rms_energy(pcm_bytes: bytes) -> float:
-    import struct, math
-    if len(pcm_bytes) < 2:
-        return 0.0
-    samples = struct.unpack(f"<{len(pcm_bytes)//2}h", pcm_bytes[:len(pcm_bytes)//2*2])
-    if not samples:
-        return 0.0
-    rms = math.sqrt(sum(s*s for s in samples) / len(samples))
-    return rms
 
 
 # ── Main ARI event loop ───────────────────────────────────────────────────────
