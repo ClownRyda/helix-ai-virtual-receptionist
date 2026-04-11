@@ -1,0 +1,132 @@
+# ============================================================
+# PBX Assistant — Docker Compose for Windows / Docker Desktop
+#
+# Differences from the Linux version:
+#   - network_mode: host is NOT supported on Windows
+#   - All services use bridge networking with explicit port maps
+#   - Asterisk talks to the agent via Docker service name (DNS)
+#   - GPU passthrough uses WSL2 backend (no nvidia-container-toolkit needed)
+#   - RTP port range trimmed to 10000-10200 to keep Windows
+#     firewall rules manageable during testing
+#
+# Your Windows host IP on LAN: find it with `ipconfig`
+# (e.g. 192.168.4.x — set WINDOWS_HOST_IP in .env.windows)
+# ============================================================
+
+services:
+
+  # ── Asterisk PBX ─────────────────────────────────────────────
+  asterisk:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.asterisk
+    container_name: pbx-asterisk
+    restart: unless-stopped
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "8088:8088/tcp"
+      # RTP — trimmed range for Windows testing
+      - "10000-10200:10000-10200/udp"
+    volumes:
+      # Use Windows-specific pjsip config
+      - ../asterisk/etc/asterisk:/etc/asterisk:ro
+    environment:
+      - TZ=America/Chicago
+    networks:
+      - pbx-net
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Python AI Agent ─────────────────────────────────────────
+  agent:
+    build:
+      context: ../agent
+      dockerfile: ../docker/Dockerfile.agent.windows
+    container_name: pbx-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000/tcp"
+      # Agent ExternalMedia RTP
+      - "20000-20100:20000-20100/udp"
+    env_file:
+      - ../agent/.env.windows
+    environment:
+      # Asterisk is reachable via Docker service name on bridge net
+      - ASTERISK_HOST=asterisk
+      - ASTERISK_ARI_PORT=8088
+      # Agent RTP must bind to 0.0.0.0 so Asterisk can reach it
+      - AGENT_RTP_HOST=0.0.0.0
+      # Ollama is a separate container
+      - OLLAMA_HOST=http://ollama:11434
+      # CPU fallback on Windows (GPU optional — see note below)
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-int8}
+    volumes:
+      - ../agent:/app
+      - agent-data:/app/data
+      # Mount credentials if you have them; comment out if not
+      # - ../agent/credentials.json:/app/credentials.json:ro
+      # - ../agent/token.json:/app/token.json
+    networks:
+      - pbx-net
+    depends_on:
+      asterisk:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  # ── Ollama LLM ───────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pbx-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      # Reuse models already on your Windows machine
+      - ollama-models:/root/.ollama
+    networks:
+      - pbx-net
+    # GPU: uncomment if Docker Desktop WSL2 GPU is working
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Dashboard ────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: pbx-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Points to the agent container on bridge net
+      - API_BASE_URL=http://agent:8000
+    networks:
+      - pbx-net
+    depends_on:
+      - agent
+
+networks:
+  pbx-net:
+    driver: bridge
+
+volumes:
+  agent-data:
+  ollama-models:

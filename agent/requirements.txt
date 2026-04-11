@@ -1,0 +1,38 @@
+# ARI / Asterisk
+aiohttp>=3.9.0
+websockets>=12.0
+
+# FastAPI web server (dashboard API + ARI bridge)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# STT - faster-whisper (local, CTranslate2 backend)
+faster-whisper>=1.0.0
+
+# TTS - Piper (installed separately via pip)
+piper-tts>=1.2.0
+
+# LLM - Ollama Python client
+ollama>=0.2.0
+
+# Google Calendar
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.127.0
+
+# Audio processing
+soundfile>=0.12.1
+numpy>=1.26.0
+scipy>=1.13.0
+
+# Database (call logs)
+sqlalchemy>=2.0.0
+aiosqlite>=0.20.0
+
+# Config
+python-dotenv>=1.0.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+
+# Utilities
+structlog>=24.1.0
