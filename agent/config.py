@@ -44,7 +44,7 @@ class Settings(BaseSettings):
 
     # ── Ollama LLM ──────────────────────────────────────────────
     ollama_host: str = Field("http://localhost:11434", env="OLLAMA_HOST")
-    ollama_model: str = Field("qwen3:8b", env="OLLAMA_MODEL")
+    ollama_model: str = Field("llama3.1:8b", env="OLLAMA_MODEL")
     ollama_timeout: int = Field(30, env="OLLAMA_TIMEOUT")
 
     # ── Piper TTS ───────────────────────────────────────────────

@@ -44,11 +44,11 @@ echo "[✓] Python deps installed"
 
 # Pull Ollama model
 if command -v ollama &>/dev/null; then
-    echo "[*] Pulling Ollama model (qwen3:8b)..."
-    ollama pull qwen3:8b
+    echo "[*] Pulling Ollama model (llama3.1:8b)..."
+    ollama pull llama3.1:8b
     echo "[✓] Model ready"
 else
-    echo "[!] Ollama not found. Install from https://ollama.com and run: ollama pull qwen3:8b"
+    echo "[!] Ollama not found. Install from https://ollama.com and run: ollama pull llama3.1:8b"
 fi
 
 echo ""

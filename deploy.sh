@@ -92,7 +92,7 @@ echo ""
 
 # ── Pull Ollama model if requested ────────────────────────────
 
-OLLAMA_MODEL=$(grep -E "^OLLAMA_MODEL=" "$ENV_FILE" | cut -d= -f2 || echo "qwen3:8b")
+OLLAMA_MODEL=$(grep -E "^OLLAMA_MODEL=" "$ENV_FILE" | cut -d= -f2 || echo "llama3.1:8b")
 
 if [[ "${1:-}" == "--pull" ]]; then
     log "Pulling Ollama model: $OLLAMA_MODEL"
