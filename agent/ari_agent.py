@@ -45,7 +45,7 @@ class RTPSocket:
 
     def __init__(self, listen_host: str, listen_port: int):
         self.listen_host = listen_host
-        self.listen_port = listen_port
+        self.listen_port = listen_port   # stored for port pool release
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((listen_host, listen_port))
         self.sock.setblocking(False)
@@ -152,8 +152,43 @@ class ARIClient:
         })
 
     async def redirect_channel(self, channel_id: str, endpoint: str):
-        """Transfer caller to an extension via PJSIP."""
+        """Transfer caller to an extension via PJSIP (exits Stasis — use dial_to_bridge for relay)."""
         await self.post(f"/channels/{channel_id}/redirect", json={"endpoint": endpoint})
+
+    async def dial_to_bridge(self, endpoint: str, bridge_id: str, app: str) -> dict | None:
+        """
+        Originate a call to endpoint and put it directly into our bridge.
+        Unlike redirect_channel, this keeps the call inside Stasis so we
+        retain full RTP/bridge control needed for the translation relay.
+        """
+        return await self.post("/channels", json={
+            "endpoint": f"PJSIP/{endpoint}",
+            "app": app,
+            "appArgs": f"relay,{bridge_id}",
+            "originator": "",
+            "callerId": "Helix AI Transfer",
+        })
+
+    async def snoop_channel(
+        self, channel_id: str, app: str, spy: str = "in", whisper: str = "none"
+    ) -> dict | None:
+        """
+        Create a snoop channel on channel_id.
+        spy="in"  → receive audio FROM that channel only (what they say)
+        spy="out" → receive audio TO that channel only (what they hear)
+        spy="both"→ both directions mixed
+
+        This gives us a clean, isolated audio stream per participant
+        so the relay can tell caller audio from agent audio apart.
+        """
+        return await self.post(
+            f"/channels/{channel_id}/snoop",
+            json={
+                "app": app,
+                "spy": spy,
+                "whisper": whisper,
+            },
+        )
 
     async def hangup(self, channel_id: str, reason: str = "normal"):
         await self.delete(f"/channels/{channel_id}?reason={reason}")
@@ -355,22 +390,39 @@ class CallHandler:
                 await self._speak(transfer_en, language=self.state.caller_lang)
                 await asyncio.sleep(1)
 
-                # Start translation relay if caller speaks a different language
+                # ── Transfer with bilingual relay ─────────────────────
                 if self.state.caller_lang != "en":
-                    relay = TranslationRelay(
-                        ari=self.ari,
-                        channel_id=self.channel_id,
-                        bridge_id=self.bridge_id,
-                        caller_lang=self.state.caller_lang,
-                        rtp_sock=self.rtp_sock,
+                    # Dial the agent extension into our bridge directly
+                    # (keeps us in control of the audio — snoop channels work)
+                    agent_chan = await self.ari.dial_to_bridge(
+                        extension, self.bridge_id, settings.asterisk_app_name
                     )
-                    asyncio.create_task(relay.run())
-                    log.info("Translation relay started", caller_lang=self.state.caller_lang)
+                    agent_channel_id = agent_chan["id"] if agent_chan else None
 
-                # Transfer the caller to the target extension
-                await self.ari.redirect_channel(
-                    self.channel_id, f"PJSIP/{extension}"
-                )
+                    if agent_channel_id:
+                        # Give the dial a moment to connect
+                        await asyncio.sleep(2)
+                        relay = TranslationRelay(
+                            ari=self.ari,
+                            caller_channel_id=self.channel_id,
+                            agent_channel_id=agent_channel_id,
+                            bridge_id=self.bridge_id,
+                            caller_lang=self.state.caller_lang,
+                            agent_lang="en",
+                        )
+                        asyncio.create_task(relay.run())
+                        log.info("Translation relay started",
+                                 caller_lang=self.state.caller_lang,
+                                 agent_channel=agent_channel_id)
+                    else:
+                        # Dial failed — fall back to plain transfer
+                        log.warning("dial_to_bridge failed, falling back to redirect")
+                        await self.ari.redirect_channel(self.channel_id, f"PJSIP/{extension}")
+                else:
+                    # English caller — plain transfer, no relay needed
+                    await self.ari.redirect_channel(
+                        self.channel_id, f"PJSIP/{extension}"
+                    )
 
                 async with AsyncSessionLocal() as db:
                     from sqlalchemy import select
@@ -650,48 +702,158 @@ class TranslationRelay:
     """
     Real-time bidirectional translation relay for transferred calls.
 
-    When a Spanish-speaking caller is transferred to an English-speaking
-    call taker, this relay intercepts the RTP audio in both directions:
+    Architecture:
+      - Creates two snoop channels via ARI:
+          * caller_snoop  → spy="in" on caller channel  → hears caller only
+          * agent_snoop   → spy="in" on agent channel   → hears agent only
+      - Each snoop channel gets its own ExternalMedia UDP socket + VAD
+      - Two concurrent asyncio tasks run in parallel, one per direction:
+          caller speaks ES → Whisper → translate → Piper EN → play into bridge
+          agent  speaks EN → Whisper → translate → Piper ES → play into bridge
+      - Both participants hear their own language; translation is invisible
 
-      Caller  (ES audio) → Whisper → translate ES→EN → Piper EN → Call taker
-      Call taker (EN audio) → Whisper → translate EN→ES → Piper ES → Caller
-
-    Both parties hear their own language. The relay runs as a background
-    asyncio task until the call ends (StasisEnd / channel hangup).
+    Why snoop channels instead of one mixed socket:
+      - A mixing bridge produces a single audio mix — we can't tell who spoke
+      - Snoop channels isolate per-participant audio, giving clean VAD + detection
     """
 
     def __init__(
         self,
         ari: ARIClient,
-        channel_id: str,
+        caller_channel_id: str,
+        agent_channel_id: str,
         bridge_id: str,
         caller_lang: str,
-        rtp_sock: RTPSocket,
         agent_lang: str = "en",
     ):
-        self.ari = ari
-        self.channel_id = channel_id
-        self.bridge_id = bridge_id
-        self.caller_lang = caller_lang
-        self.agent_lang = agent_lang
-        self.rtp_sock = rtp_sock
-        self._running = True
+        self.ari              = ari
+        self.caller_channel_id = caller_channel_id
+        self.agent_channel_id  = agent_channel_id
+        self.bridge_id         = bridge_id
+        self.caller_lang       = caller_lang
+        self.agent_lang        = agent_lang
+        self._running          = True
+
+        # Snoop channel IDs + RTP sockets — populated in run()
+        self._caller_snoop_id: str | None = None
+        self._agent_snoop_id:  str | None = None
+        self._caller_sock: RTPSocket | None = None
+        self._agent_sock:  RTPSocket | None = None
 
     async def run(self):
-        """
-        Main relay loop. Runs concurrently with the transferred call.
-        Listens on the existing RTP socket (which stays open after transfer),
-        translates each utterance, and plays the translation back into the bridge.
-        """
-        log.info("TranslationRelay running",
+        """Set up snoop channels and start both translation loops concurrently."""
+        log.info("TranslationRelay starting",
                  caller_lang=self.caller_lang,
                  agent_lang=self.agent_lang)
+        try:
+            # ── Create snoop channels ────────────────────────────────
+            caller_snoop = await self.ari.snoop_channel(
+                self.caller_channel_id,
+                app=settings.asterisk_app_name,
+                spy="in",       # only audio FROM the caller
+                whisper="none",
+            )
+            agent_snoop = await self.ari.snoop_channel(
+                self.agent_channel_id,
+                app=settings.asterisk_app_name,
+                spy="in",       # only audio FROM the agent
+                whisper="none",
+            )
+
+            if not caller_snoop or not agent_snoop:
+                log.error("Failed to create snoop channels — relay aborted")
+                return
+
+            self._caller_snoop_id = caller_snoop["id"]
+            self._agent_snoop_id  = agent_snoop["id"]
+
+            # ── Open ExternalMedia sockets for each snoop channel ────
+            caller_port = _allocate_rtp_port()
+            agent_port  = _allocate_rtp_port()
+
+            self._caller_sock = RTPSocket(settings.agent_rtp_host, caller_port)
+            self._agent_sock  = RTPSocket(settings.agent_rtp_host, agent_port)
+
+            rtp_advertise = settings.agent_rtp_advertise_host or settings.agent_rtp_host
+
+            # Wire caller snoop → our UDP socket
+            caller_ext = await self.ari.create_external_media(
+                settings.asterisk_app_name,
+                f"{rtp_advertise}:{caller_port}",
+            )
+            # Wire agent snoop → our UDP socket
+            agent_ext = await self.ari.create_external_media(
+                settings.asterisk_app_name,
+                f"{rtp_advertise}:{agent_port}",
+            )
+
+            # Add ExternalMedia channels to the bridge so audio flows
+            if caller_ext:
+                await self.ari.add_to_bridge(self.bridge_id, caller_ext["id"])
+                # Point our socket at Asterisk's RTP end
+                ast_addr = await self.ari.get_channel_var(caller_ext["id"], "UNICASTRTP_LOCAL_ADDRESS")
+                ast_port = await self.ari.get_channel_var(caller_ext["id"], "UNICASTRTP_LOCAL_PORT")
+                if ast_addr and ast_port:
+                    self._caller_sock.asterisk_addr = (ast_addr, int(ast_port))
+
+            if agent_ext:
+                await self.ari.add_to_bridge(self.bridge_id, agent_ext["id"])
+                ast_addr = await self.ari.get_channel_var(agent_ext["id"], "UNICASTRTP_LOCAL_ADDRESS")
+                ast_port = await self.ari.get_channel_var(agent_ext["id"], "UNICASTRTP_LOCAL_PORT")
+                if ast_addr and ast_port:
+                    self._agent_sock.asterisk_addr = (ast_addr, int(ast_port))
+
+            log.info("TranslationRelay sockets ready",
+                     caller_port=caller_port,
+                     agent_port=agent_port)
+
+            # ── Run both translation loops concurrently ───────────────
+            await asyncio.gather(
+                self._translate_loop(
+                    sock=self._caller_sock,
+                    src_lang=self.caller_lang,
+                    tgt_lang=self.agent_lang,
+                    output_sock=self._agent_sock,   # translated audio → agent's ear
+                    label="caller→agent",
+                ),
+                self._translate_loop(
+                    sock=self._agent_sock,
+                    src_lang=self.agent_lang,
+                    tgt_lang=self.caller_lang,
+                    output_sock=self._caller_sock,  # translated audio → caller's ear
+                    label="agent→caller",
+                ),
+            )
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.error("TranslationRelay.run error", error=str(e), exc_info=True)
+        finally:
+            await self._cleanup()
+
+    async def _translate_loop(
+        self,
+        sock: RTPSocket,
+        src_lang: str,
+        tgt_lang: str,
+        output_sock: RTPSocket,
+        label: str,
+    ):
+        """
+        Listen on sock, transcribe each utterance, translate, and play
+        the translated audio back through output_sock.
+        """
+        from llm.translate_engine import translate as do_translate
 
         vad = SileroVADEngine(
             threshold=settings.vad_threshold,
             min_silence_ms=settings.vad_min_silence_ms,
             speech_pad_ms=settings.vad_speech_pad_ms,
         )
+        loop = asyncio.get_event_loop()
+
+        log.info("Translation loop started", direction=label, src=src_lang, tgt=tgt_lang)
 
         while self._running:
             try:
@@ -699,16 +861,14 @@ class TranslationRelay:
                 speech_started = False
                 no_data_count = 0
                 total_frames = 0
-                max_frames = int(MAX_UTTERANCE_SECONDS * 1000 / FRAME_MS)
-                max_silence = int(5000 / FRAME_MS)
-                loop = asyncio.get_event_loop()
+                max_frames   = int(MAX_UTTERANCE_SECONDS * 1000 / FRAME_MS)
+                max_silence  = int(5000 / FRAME_MS)
                 vad.reset()
 
-                # ── Listen for one utterance ──────────────────────────
+                # ── Collect one utterance ─────────────────────────────
                 while total_frames < max_frames:
                     data = await loop.run_in_executor(
-                        None,
-                        lambda: _recv_nonblocking(self.rtp_sock.sock, 2048)
+                        None, lambda: _recv_nonblocking(sock.sock, 2048)
                     )
                     if data and len(data) > RTP_HEADER_SIZE:
                         payload = data[RTP_HEADER_SIZE:]
@@ -735,51 +895,59 @@ class TranslationRelay:
                     await asyncio.sleep(0.1)
                     continue
 
-                # ── Transcribe with language detection ────────────────
+                # ── Transcribe ────────────────────────────────────────
                 result = await loop.run_in_executor(
-                    None, transcribe_pcm, bytes(audio_buffer), SAMPLE_RATE, 1, None
+                    None, transcribe_pcm, bytes(audio_buffer), SAMPLE_RATE, 1, src_lang
                 )
 
                 if not result.text:
                     continue
 
-                src_lang = result.language
-                src_text = result.text
-
-                # Determine translation direction based on who spoke
-                if src_lang == self.caller_lang:
-                    # Caller spoke — translate to agent language for the call taker
-                    tgt_lang = self.agent_lang
-                elif src_lang == self.agent_lang:
-                    # Call taker spoke — translate to caller language
-                    tgt_lang = self.caller_lang
-                else:
-                    # Unknown speaker — skip
-                    continue
-
-                log.info("Relay translating",
-                         src_lang=src_lang,
-                         tgt_lang=tgt_lang,
-                         text=src_text[:60])
+                log.info("Relay transcribed",
+                         direction=label,
+                         lang=result.language,
+                         text=result.text[:60])
 
                 # ── Translate ─────────────────────────────────────────
-                from llm.translate_engine import translate
-                translated = await translate(src_text, tgt_lang, source_lang=src_lang)
+                translated = await do_translate(result.text, tgt_lang, source_lang=src_lang)
 
-                # ── Synthesize and play into the bridge ───────────────
+                # ── Synthesize + play into the other party's ear ──────
                 pcm = await loop.run_in_executor(
                     None, synthesize_pcm, translated, tgt_lang
                 )
-                if pcm and self.rtp_sock:
-                    self.rtp_sock.send_pcm(pcm)
+                if pcm and output_sock:
+                    output_sock.send_pcm(pcm)
+                    log.info("Relay played translation",
+                             direction=label,
+                             tgt=tgt_lang,
+                             text=translated[:60])
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                log.error("TranslationRelay error", error=str(e))
+                log.error("TranslationRelay._translate_loop error",
+                          direction=label, error=str(e))
                 await asyncio.sleep(0.5)
 
-        log.info("TranslationRelay stopped")
+        log.info("Translation loop stopped", direction=label)
+
+    async def _cleanup(self):
+        """Tear down snoop channels and RTP sockets."""
+        for snoop_id in [self._caller_snoop_id, self._agent_snoop_id]:
+            if snoop_id:
+                try:
+                    await self.ari.hangup(snoop_id)
+                except Exception:
+                    pass
+        for sock, port in [
+            (self._caller_sock, getattr(self._caller_sock, "listen_port", None)),
+            (self._agent_sock,  getattr(self._agent_sock,  "listen_port", None)),
+        ]:
+            if sock:
+                sock.close()
+            if port:
+                _release_rtp_port(port)
+        log.info("TranslationRelay cleaned up")
 
     def stop(self):
         self._running = False
