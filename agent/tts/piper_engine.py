@@ -17,12 +17,20 @@ PIPER_SAMPLE_RATE = 22050
 ASTERISK_SAMPLE_RATE = 16000
 
 
-def synthesize_pcm(text: str) -> bytes:
+# Language → Piper model name mapping
+LANG_MODELS = {
+    "en": None,   # None = use settings.piper_model (default English)
+    "es": None,   # None = use settings.piper_model_es (Spanish)
+}
+
+
+def synthesize_pcm(text: str, language: str = "en") -> bytes:
     """
     Synthesize text to raw PCM16 audio at 16kHz (slin16) for Asterisk.
 
     Args:
         text: Text to speak
+        language: Language code ('en' or 'es') — selects the right Piper voice
 
     Returns:
         Raw 16-bit signed PCM bytes at 16000 Hz, mono.
@@ -30,8 +38,14 @@ def synthesize_pcm(text: str) -> bytes:
     if not text:
         return b""
 
-    model_path = os.path.join(settings.piper_model_path, f"{settings.piper_model}.onnx")
-    config_path = os.path.join(settings.piper_model_path, f"{settings.piper_model}.onnx.json")
+    # Pick the right voice model for the language
+    if language == "es" and settings.piper_model_es:
+        model_name = settings.piper_model_es
+    else:
+        model_name = settings.piper_model
+
+    model_path = os.path.join(settings.piper_model_path, f"{model_name}.onnx")
+    config_path = os.path.join(settings.piper_model_path, f"{model_name}.onnx.json")
 
     if not os.path.exists(model_path):
         log.error("Piper model not found", path=model_path)

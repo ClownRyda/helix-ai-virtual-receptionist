@@ -49,7 +49,17 @@ class Settings(BaseSettings):
 
     # ── Piper TTS ───────────────────────────────────────────────
     piper_model: str = Field("en_US-lessac-medium", env="PIPER_MODEL")
+    piper_model_es: str = Field("es_MX-claude-high", env="PIPER_MODEL_ES")
     piper_model_path: str = Field("/opt/piper/models", env="PIPER_MODEL_PATH")
+
+    # ── Bilingual / translation ──────────────────────────────────
+    # Languages the AI attendant supports. First is the default/fallback.
+    supported_languages: str = Field("en,es", env="SUPPORTED_LANGUAGES")
+    # When True, Whisper auto-detects caller language each turn.
+    # When False, uses default_language for all calls.
+    auto_detect_language: bool = Field(True, env="AUTO_DETECT_LANGUAGE")
+    # Whisper model to use for multilingual calls (must NOT be a .en-only model)
+    whisper_model_multilingual: str = Field("base", env="WHISPER_MODEL_MULTILINGUAL")
 
     # ── Google Calendar ─────────────────────────────────────────
     google_credentials_file: str = Field("credentials.json", env="GOOGLE_CREDENTIALS_FILE")

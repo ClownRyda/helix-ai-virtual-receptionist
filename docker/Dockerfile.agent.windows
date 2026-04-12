@@ -28,7 +28,13 @@ RUN mkdir -p /opt/piper/models && \
     -O /opt/piper/models/en_US-lessac-medium.onnx && \
     wget -q \
     https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json \
-    -O /opt/piper/models/en_US-lessac-medium.onnx.json
+    -O /opt/piper/models/en_US-lessac-medium.onnx.json && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx \
+    -O /opt/piper/models/es_MX-claude-high.onnx && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json \
+    -O /opt/piper/models/es_MX-claude-high.onnx.json
 
 WORKDIR /app
 

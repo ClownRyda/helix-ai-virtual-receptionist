@@ -23,6 +23,7 @@ from config import settings
 from stt.whisper_engine import transcribe_pcm
 from tts.piper_engine import synthesize_pcm
 from llm.intent_engine import detect_intent, generate_response, ConversationState
+from llm.translate_engine import ensure_english
 from calendar.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
 from routing.router import get_extension_for_intent
 from database import AsyncSessionLocal, CallLog
@@ -247,27 +248,45 @@ class CallHandler:
         await self.ari.add_to_bridge(self.bridge_id, self.ext_media_id)
 
     async def _greet(self):
-        greeting = (
+        # Bilingual greeting — spoken in both English and Spanish so the
+        # caller hears their language right away, before we detect it.
+        greeting_en = (
             f"Thank you for calling {settings.business_name}. "
             f"This is {settings.agent_name}. How can I help you today?"
         )
-        await self._speak(greeting)
+        greeting_es = (
+            f"Gracias por llamar a {settings.business_name}. "
+            f"Le habla {settings.agent_name}. \u00bfEn qu\u00e9 le puedo ayudar?"
+        )
+        await self._speak(greeting_en, language="en")
+        await self._speak(greeting_es, language="es")
 
     async def _conversation_loop(self):
         """Main conversation loop — listen, transcribe, respond, route."""
         max_turns = 10
         while self.state.turn_count < max_turns:
             # Listen for caller utterance
-            utterance = await self._listen()
-            if not utterance:
+            listen_result = await self._listen()
+            if not listen_result:
                 if self.state.turn_count == 0:
-                    await self._speak("I'm sorry, I didn't catch that. Could you repeat?")
+                    lang = self.state.caller_lang
+                    sorry = "Lo siento, no le escuché. ¿Puede repetir?" if lang == "es" else "I\'m sorry, I didn\'t catch that. Could you repeat?"
+                    await self._speak(sorry, language=lang)
                     continue
                 break
 
-            self.transcript_log.append(f"Caller: {utterance}")
+            utterance, detected_lang = listen_result
 
-            # First pass: detect intent
+            # Track caller language — lock in after 2 consistent turns
+            if not self.state.lang_confirmed:
+                self.state.caller_lang = detected_lang
+                if self.state.turn_count >= 1:
+                    self.state.lang_confirmed = True
+                    log.info("Caller language confirmed", lang=detected_lang, call_id=self.call_id)
+
+            self.transcript_log.append(f"Caller [{detected_lang}]: {utterance}")
+
+            # First pass: detect intent (utterance is already in English)
             if not self.state.intent or self.state.intent == "unknown":
                 intent_result = await detect_intent(utterance, self.state)
             else:
@@ -284,9 +303,9 @@ class CallHandler:
                     # Also try to get caller name
                     if not self.state.caller_name:
                         name_prompt = f"I'd be happy to schedule a callback. Could I get your name and the best number to reach you at? {slots_speech}"
-                        await self._speak(name_prompt)
+                        await self._speak(name_prompt, language=self.state.caller_lang)
                     else:
-                        await self._speak(slots_speech)
+                        await self._speak(slots_speech, language=self.state.caller_lang)
                     continue
 
                 # Try to match what they said to a slot
@@ -305,7 +324,7 @@ class CallHandler:
                         f"We'll call you at {self.state.caller_phone}. "
                         f"Is there anything else I can help you with?"
                     )
-                    await self._speak(confirm_msg)
+                    await self._speak(confirm_msg, language=self.state.caller_lang)
 
                     async with AsyncSessionLocal() as db:
                         from sqlalchemy import select
@@ -322,7 +341,7 @@ class CallHandler:
                     # Collect more info via LLM
                     context = f"Available slots: {[s['label'] for s in self.available_slots]}"
                     response = await generate_response(utterance, self.state, context)
-                    await self._speak(response)
+                    await self._speak(response, language=self.state.caller_lang)
 
             # ── Transfer flow ────────────────────────────────────────
             elif intent == "transfer":
@@ -332,10 +351,21 @@ class CallHandler:
                     )
 
                 dept_name = self.state.department or "the right person"
-                await self._speak(
-                    f"Of course! Let me transfer you to {dept_name} right now. Please hold."
-                )
+                transfer_en = f"Of course! Let me transfer you to {dept_name} right now. Please hold."
+                await self._speak(transfer_en, language=self.state.caller_lang)
                 await asyncio.sleep(1)
+
+                # Start translation relay if caller speaks a different language
+                if self.state.caller_lang != "en":
+                    relay = TranslationRelay(
+                        ari=self.ari,
+                        channel_id=self.channel_id,
+                        bridge_id=self.bridge_id,
+                        caller_lang=self.state.caller_lang,
+                        rtp_sock=self.rtp_sock,
+                    )
+                    asyncio.create_task(relay.run())
+                    log.info("Translation relay started", caller_lang=self.state.caller_lang)
 
                 # Transfer the caller to the target extension
                 await self.ari.redirect_channel(
@@ -359,12 +389,17 @@ class CallHandler:
             # ── General conversation ─────────────────────────────────
             else:
                 response = await generate_response(utterance, self.state)
-                self.transcript_log.append(f"Agent: {response}")
-                await self._speak(response)
+                self.transcript_log.append(f"Agent [{self.state.caller_lang}]: {response}")
+                await self._speak(response, language=self.state.caller_lang)
 
             # Natural end-of-call detection
-            if any(word in utterance.lower() for word in ["goodbye", "bye", "thank you", "that's all"]):
-                await self._speak("Thank you for calling. Have a great day!")
+            farewell_words = ["goodbye", "bye", "thank you", "that's all",
+                              "adiós", "adios", "gracias", "hasta luego"]
+            if any(word in utterance.lower() for word in farewell_words):
+                farewell = ("¡Gracias por llamar. Que tenga un buen día!"
+                            if self.state.caller_lang == "es"
+                            else "Thank you for calling. Have a great day!")
+                await self._speak(farewell, language=self.state.caller_lang)
                 break
 
         # Save final transcript
@@ -450,17 +485,34 @@ class CallHandler:
         if len(audio_buffer) < BYTES_PER_FRAME * 5:
             return ""
 
-        return await asyncio.get_event_loop().run_in_executor(
-            None, transcribe_pcm, bytes(audio_buffer), SAMPLE_RATE, 1
+        # Whisper transcription with language auto-detection
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, transcribe_pcm, bytes(audio_buffer), SAMPLE_RATE, 1, None
         )
 
-    async def _speak(self, text: str):
+        if not result.text:
+            return None
+
+        detected_lang = result.language
+        english_text = result.text
+
+        # Translate to English for intent detection if needed
+        if detected_lang != "en":
+            english_text, _ = await ensure_english(result.text, detected_lang)
+            log.info("Translated caller utterance",
+                     original=result.text[:60],
+                     translated=english_text[:60],
+                     lang=detected_lang)
+
+        return english_text, detected_lang
+
+    async def _speak(self, text: str, language: str = "en"):
         """Synthesize text with Piper TTS and inject audio back into the call."""
-        log.info("Speaking", text=text[:80], call_id=self.call_id)
-        self.transcript_log.append(f"Agent: {text}")
+        log.info("Speaking", text=text[:80], lang=language, call_id=self.call_id)
+        self.transcript_log.append(f"Agent [{language}]: {text}")
 
         loop = asyncio.get_event_loop()
-        pcm = await loop.run_in_executor(None, synthesize_pcm, text)
+        pcm = await loop.run_in_executor(None, synthesize_pcm, text, language)
 
         if pcm and self.rtp_sock:
             self.rtp_sock.send_pcm(pcm)
@@ -590,3 +642,144 @@ async def run_ari_agent():
                         active_calls[channel_id].cancel()
 
     await ari.stop()
+
+
+# ── Translation Relay ─────────────────────────────────────────────────────────
+
+class TranslationRelay:
+    """
+    Real-time bidirectional translation relay for transferred calls.
+
+    When a Spanish-speaking caller is transferred to an English-speaking
+    call taker, this relay intercepts the RTP audio in both directions:
+
+      Caller  (ES audio) → Whisper → translate ES→EN → Piper EN → Call taker
+      Call taker (EN audio) → Whisper → translate EN→ES → Piper ES → Caller
+
+    Both parties hear their own language. The relay runs as a background
+    asyncio task until the call ends (StasisEnd / channel hangup).
+    """
+
+    def __init__(
+        self,
+        ari: ARIClient,
+        channel_id: str,
+        bridge_id: str,
+        caller_lang: str,
+        rtp_sock: RTPSocket,
+        agent_lang: str = "en",
+    ):
+        self.ari = ari
+        self.channel_id = channel_id
+        self.bridge_id = bridge_id
+        self.caller_lang = caller_lang
+        self.agent_lang = agent_lang
+        self.rtp_sock = rtp_sock
+        self._running = True
+
+    async def run(self):
+        """
+        Main relay loop. Runs concurrently with the transferred call.
+        Listens on the existing RTP socket (which stays open after transfer),
+        translates each utterance, and plays the translation back into the bridge.
+        """
+        log.info("TranslationRelay running",
+                 caller_lang=self.caller_lang,
+                 agent_lang=self.agent_lang)
+
+        vad = SileroVADEngine(
+            threshold=settings.vad_threshold,
+            min_silence_ms=settings.vad_min_silence_ms,
+            speech_pad_ms=settings.vad_speech_pad_ms,
+        )
+
+        while self._running:
+            try:
+                audio_buffer = bytearray()
+                speech_started = False
+                no_data_count = 0
+                total_frames = 0
+                max_frames = int(MAX_UTTERANCE_SECONDS * 1000 / FRAME_MS)
+                max_silence = int(5000 / FRAME_MS)
+                loop = asyncio.get_event_loop()
+                vad.reset()
+
+                # ── Listen for one utterance ──────────────────────────
+                while total_frames < max_frames:
+                    data = await loop.run_in_executor(
+                        None,
+                        lambda: _recv_nonblocking(self.rtp_sock.sock, 2048)
+                    )
+                    if data and len(data) > RTP_HEADER_SIZE:
+                        payload = data[RTP_HEADER_SIZE:]
+                        no_data_count = 0
+                        vad_event = vad.process_chunk(payload)
+
+                        if vad_event and "start" in vad_event:
+                            speech_started = True
+
+                        if speech_started:
+                            audio_buffer.extend(payload)
+
+                        if vad_event and "end" in vad_event and speech_started:
+                            break
+                    else:
+                        await asyncio.sleep(0.02)
+                        no_data_count += 1
+                        if not speech_started and no_data_count >= max_silence:
+                            break
+
+                    total_frames += 1
+
+                if len(audio_buffer) < BYTES_PER_FRAME * 5:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                # ── Transcribe with language detection ────────────────
+                result = await loop.run_in_executor(
+                    None, transcribe_pcm, bytes(audio_buffer), SAMPLE_RATE, 1, None
+                )
+
+                if not result.text:
+                    continue
+
+                src_lang = result.language
+                src_text = result.text
+
+                # Determine translation direction based on who spoke
+                if src_lang == self.caller_lang:
+                    # Caller spoke — translate to agent language for the call taker
+                    tgt_lang = self.agent_lang
+                elif src_lang == self.agent_lang:
+                    # Call taker spoke — translate to caller language
+                    tgt_lang = self.caller_lang
+                else:
+                    # Unknown speaker — skip
+                    continue
+
+                log.info("Relay translating",
+                         src_lang=src_lang,
+                         tgt_lang=tgt_lang,
+                         text=src_text[:60])
+
+                # ── Translate ─────────────────────────────────────────
+                from llm.translate_engine import translate
+                translated = await translate(src_text, tgt_lang, source_lang=src_lang)
+
+                # ── Synthesize and play into the bridge ───────────────
+                pcm = await loop.run_in_executor(
+                    None, synthesize_pcm, translated, tgt_lang
+                )
+                if pcm and self.rtp_sock:
+                    self.rtp_sock.send_pcm(pcm)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error("TranslationRelay error", error=str(e))
+                await asyncio.sleep(0.5)
+
+        log.info("TranslationRelay stopped")
+
+    def stop(self):
+        self._running = False

@@ -54,6 +54,9 @@ class ConversationState:
         self.reason: str | None = None
         self.turn_count: int = 0
         self.collecting_info: bool = False  # True when gathering name/phone for scheduling
+        # Bilingual support
+        self.caller_lang: str = "en"        # detected language of the caller
+        self.lang_confirmed: bool = False    # True once we've seen 2+ turns in same language
 
     def add_turn(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})
@@ -93,6 +96,10 @@ async def detect_intent(transcript: str, state: ConversationState) -> dict:
         return {"intent": "unknown", "department": None, "caller_name": None, "reason": None}
 
 
+BILINGUAL_ADDENDUM = """
+IMPORTANT: You must respond in {response_lang}. Do not mix languages."""
+
+
 async def generate_response(transcript: str, state: ConversationState, context: str = "") -> str:
     """
     Generate a conversational response for the caller.
@@ -105,10 +112,13 @@ async def generate_response(transcript: str, state: ConversationState, context: 
     Returns:
         Text response to speak to the caller.
     """
+    lang_names = {"en": "English", "es": "Spanish"}
+    response_lang = lang_names.get(state.caller_lang, "English")
+
     system = CONVERSATION_SYSTEM_PROMPT.format(
         agent_name=settings.agent_name,
         business_name=settings.business_name,
-    )
+    ) + BILINGUAL_ADDENDUM.format(response_lang=response_lang)
 
     if context:
         system += f"\n\nContext: {context}"
