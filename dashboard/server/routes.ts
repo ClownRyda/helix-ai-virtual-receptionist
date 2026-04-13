@@ -15,13 +15,13 @@ const mockCalls = [
 ];
 
 const mockRouting = [
-  { id: 1, keyword: "sales",     extension: "1002", description: "Sales team",           active: true,  priority: 10 },
-  { id: 2, keyword: "pricing",   extension: "1002", description: "Pricing inquiries",     active: true,  priority: 9  },
-  { id: 3, keyword: "billing",   extension: "1002", description: "Billing department",    active: true,  priority: 10 },
-  { id: 4, keyword: "support",   extension: "1003", description: "Technical support",     active: true,  priority: 10 },
-  { id: 5, keyword: "technical", extension: "1003", description: "Tech support fallback", active: true,  priority: 9  },
-  { id: 6, keyword: "operator",  extension: "1001", description: "Operator / reception",  active: true,  priority: 5  },
-  { id: 7, keyword: "emergency", extension: "1001", description: "Emergency line",        active: false, priority: 20 },
+  { id: 1, keyword: "sales",     extension: "1002", description: "Sales team",           active: true,  priority: 10, agent_lang: "en" },
+  { id: 2, keyword: "pricing",   extension: "1002", description: "Pricing inquiries",     active: true,  priority: 9,  agent_lang: "en" },
+  { id: 3, keyword: "billing",   extension: "1002", description: "Billing department",    active: true,  priority: 10, agent_lang: "en" },
+  { id: 4, keyword: "support",   extension: "1003", description: "Technical support",     active: true,  priority: 10, agent_lang: "en" },
+  { id: 5, keyword: "technical", extension: "1003", description: "Tech support fallback", active: true,  priority: 9,  agent_lang: "en" },
+  { id: 6, keyword: "operator",  extension: "1001", description: "Operator / reception",  active: true,  priority: 5,  agent_lang: "en" },
+  { id: 7, keyword: "emergency", extension: "1001", description: "Emergency line",        active: false, priority: 20, agent_lang: "en" },
 ];
 
 const mockAppointments = [

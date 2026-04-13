@@ -278,13 +278,29 @@ Quick reference:
 
 ## Extension Routing
 
-Default routing (editable via dashboard or `ROUTING_RULES` env var):
+Default routing (editable live via the dashboard Routing page):
 
-| Keyword caller says | Routes to | Extension |
-|---|---|---|
-| "sales", "pricing", "billing" | Sales | 1002 |
-| "support", "technical", "help" | Support | 1003 |
-| "operator", "person", "anyone" | Operator | 1001 |
+| Keyword caller says | Routes to | Extension | Agent Language |
+|---|---|---|---|
+| "sales", "pricing", "billing" | Sales | 1002 | `en` |
+| "support", "technical", "help" | Support | 1003 | `en` |
+| "operator", "person", "anyone" | Operator | 1001 | `en` |
+
+### Agent Language per Extension
+
+Each routing rule stores the language spoken by the person at that extension (`agent_lang`). When a call is transferred, the system automatically compares the caller's detected language against the agent's language:
+
+```
+caller_lang == agent_lang  →  plain transfer (no relay, no overhead)
+caller_lang != agent_lang  →  TranslationRelay starts automatically
+```
+
+To mark an extension as Spanish-speaking, edit the routing rule in the dashboard and set **Agent Language** to `es`. No code changes needed — the relay activates or skips based purely on this value at call time.
+
+**Example:** Hire a Spanish-speaking support agent on ext 1004:
+1. Add routing rule: keyword `soporte` → extension `1004` → agent_lang `es`
+2. Spanish caller says "soporte" → routes to 1004 → same language → no relay
+3. English caller says "soporte" → routes to 1004 → different language → relay starts automatically
 
 ---
 

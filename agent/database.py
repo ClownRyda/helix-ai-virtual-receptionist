@@ -55,6 +55,11 @@ class RoutingRule(Base):
     description = Column(String(256), nullable=True)
     active = Column(Boolean, default=True)
     priority = Column(Integer, default=100)
+    # Language spoken by the person at this extension.
+    # The relay compares this against the caller's detected language.
+    # If they differ, live translation kicks in automatically.
+    # 'en' = English, 'es' = Spanish, etc.
+    agent_lang = Column(String(8), default="en")
 
 
 async def init_db():
@@ -67,11 +72,11 @@ async def init_db():
         result = await session.execute(select(RoutingRule))
         if not result.scalars().first():
             defaults = [
-                RoutingRule(keyword="sales", extension="1002", description="Sales department", priority=10),
-                RoutingRule(keyword="billing", extension="1002", description="Billing goes to sales", priority=20),
-                RoutingRule(keyword="support", extension="1003", description="Technical support", priority=10),
-                RoutingRule(keyword="technical", extension="1003", description="Technical issues", priority=20),
-                RoutingRule(keyword="operator", extension="1001", description="Operator / reception", priority=10),
+                RoutingRule(keyword="sales",     extension="1002", description="Sales department",     priority=10, agent_lang="en"),
+                RoutingRule(keyword="billing",   extension="1002", description="Billing goes to sales", priority=20, agent_lang="en"),
+                RoutingRule(keyword="support",   extension="1003", description="Technical support",     priority=10, agent_lang="en"),
+                RoutingRule(keyword="technical", extension="1003", description="Technical issues",      priority=20, agent_lang="en"),
+                RoutingRule(keyword="operator",  extension="1001", description="Operator / reception",  priority=10, agent_lang="en"),
             ]
             session.add_all(defaults)
             await session.commit()

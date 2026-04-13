@@ -25,7 +25,7 @@ from tts.piper_engine import synthesize_pcm
 from llm.intent_engine import detect_intent, generate_response, ConversationState
 from llm.translate_engine import ensure_english
 from calendar.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
-from routing.router import get_extension_for_intent
+from routing.router import get_route_for_intent
 from database import AsyncSessionLocal, CallLog
 from vad import SileroVADEngine
 
@@ -381,45 +381,54 @@ class CallHandler:
             # ── Transfer flow ────────────────────────────────────────
             elif intent == "transfer":
                 async with AsyncSessionLocal() as db:
-                    extension = await get_extension_for_intent(
+                    route     = await get_route_for_intent(
                         self.state.department, intent, db
                     )
+                extension  = route.extension
+                agent_lang = route.agent_lang
 
                 dept_name = self.state.department or "the right person"
-                transfer_en = f"Of course! Let me transfer you to {dept_name} right now. Please hold."
-                await self._speak(transfer_en, language=self.state.caller_lang)
+                transfer_msg = f"Of course! Let me transfer you to {dept_name} right now. Please hold."
+                await self._speak(transfer_msg, language=self.state.caller_lang)
                 await asyncio.sleep(1)
 
-                # ── Transfer with bilingual relay ─────────────────────
-                if self.state.caller_lang != "en":
-                    # Dial the agent extension into our bridge directly
-                    # (keeps us in control of the audio — snoop channels work)
+                # Smart relay: only translate when caller and agent speak different languages
+                need_relay = self.state.caller_lang != agent_lang
+
+                log.info("Transfer decision",
+                         extension=extension,
+                         caller_lang=self.state.caller_lang,
+                         agent_lang=agent_lang,
+                         relay=need_relay)
+
+                if need_relay:
                     agent_chan = await self.ari.dial_to_bridge(
                         extension, self.bridge_id, settings.asterisk_app_name
                     )
                     agent_channel_id = agent_chan["id"] if agent_chan else None
 
                     if agent_channel_id:
-                        # Give the dial a moment to connect
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(2)  # let the call connect
                         relay = TranslationRelay(
                             ari=self.ari,
                             caller_channel_id=self.channel_id,
                             agent_channel_id=agent_channel_id,
                             bridge_id=self.bridge_id,
                             caller_lang=self.state.caller_lang,
-                            agent_lang="en",
+                            agent_lang=agent_lang,
                         )
                         asyncio.create_task(relay.run())
                         log.info("Translation relay started",
                                  caller_lang=self.state.caller_lang,
-                                 agent_channel=agent_channel_id)
+                                 agent_lang=agent_lang,
+                                 extension=extension)
                     else:
-                        # Dial failed — fall back to plain transfer
                         log.warning("dial_to_bridge failed, falling back to redirect")
                         await self.ari.redirect_channel(self.channel_id, f"PJSIP/{extension}")
                 else:
-                    # English caller — plain transfer, no relay needed
+                    # Same language — plain transfer, no relay overhead
+                    log.info("Same-language transfer, no relay needed",
+                             lang=self.state.caller_lang, extension=extension)
                     await self.ari.redirect_channel(
                         self.channel_id, f"PJSIP/{extension}"
                     )
