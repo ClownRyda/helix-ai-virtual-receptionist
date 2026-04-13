@@ -283,36 +283,79 @@ class CallHandler:
         await self.ari.add_to_bridge(self.bridge_id, self.ext_media_id)
 
     async def _greet(self):
-        # Bilingual greeting — spoken in both English and Spanish so the
-        # caller hears their language right away, before we detect it.
-        greeting_en = (
-            f"Thank you for calling {settings.business_name}. "
-            f"This is {settings.agent_name}. How can I help you today?"
-        )
-        greeting_es = (
-            f"Gracias por llamar a {settings.business_name}. "
-            f"Le habla {settings.agent_name}. \u00bfEn qu\u00e9 le puedo ayudar?"
-        )
-        await self._speak(greeting_en, language="en")
-        await self._speak(greeting_es, language="es")
+        """
+        Greet in English first. After the caller responds, if they spoke
+        Spanish we replay the greeting in Spanish and lock the call language.
+        This avoids the awkward bilingual double-greeting on every call.
+        """
+        greeting = self._build_greeting("en")
+        await self._speak(greeting, language="en")
+
+        # Listen for the first response to detect language
+        listen_result = await self._listen()
+
+        if not listen_result:
+            # Nothing heard — ask again in English and let the main loop handle it
+            await self._speak("I'm sorry, I didn't catch that. How can I help you today?", language="en")
+            return
+
+        utterance, detected_lang = listen_result
+
+        # Set caller language from this first response
+        self.state.caller_lang = detected_lang
+        self.state.lang_confirmed = True
+
+        log.info("Caller language detected from greeting response",
+                 lang=detected_lang, call_id=self.call_id)
+
+        if detected_lang != "en":
+            # Replay the greeting in their language so they feel at home
+            greeting_localized = self._build_greeting(detected_lang)
+            await self._speak(greeting_localized, language=detected_lang)
+
+        # Stash the first utterance so the conversation loop doesn't miss it
+        self._first_utterance = (utterance, detected_lang)
+
+    def _build_greeting(self, lang: str) -> str:
+        """Build the greeting string for the given language."""
+        greetings = {
+            "en": (
+                f"Thank you for calling {settings.business_name}, "
+                f"we are excited to speak with you. "
+                f"This is {settings.agent_name}. How can I help you today?"
+            ),
+            "es": (
+                f"Gracias por llamar a {settings.business_name}, "
+                f"estamos muy contentos de hablar con usted. "
+                f"Le habla {settings.agent_name}. \u00bfEn qu\u00e9 le puedo ayudar hoy?"
+            ),
+        }
+        return greetings.get(lang, greetings["en"])
 
     async def _conversation_loop(self):
         """Main conversation loop — listen, transcribe, respond, route."""
         max_turns = 10
         while self.state.turn_count < max_turns:
-            # Listen for caller utterance
-            listen_result = await self._listen()
+
+            # On the first turn, use the utterance captured during _greet()
+            # so we don't make the caller repeat themselves
+            if self.state.turn_count == 0 and hasattr(self, "_first_utterance"):
+                listen_result = self._first_utterance
+                del self._first_utterance
+            else:
+                listen_result = await self._listen()
+
             if not listen_result:
                 if self.state.turn_count == 0:
                     lang = self.state.caller_lang
-                    sorry = "Lo siento, no le escuché. ¿Puede repetir?" if lang == "es" else "I\'m sorry, I didn\'t catch that. Could you repeat?"
+                    sorry = "Lo siento, no le escuché. ¿Puede repetir?" if lang == "es" else "I'm sorry, I didn't catch that. Could you repeat?"
                     await self._speak(sorry, language=lang)
                     continue
                 break
 
             utterance, detected_lang = listen_result
 
-            # Track caller language — lock in after 2 consistent turns
+            # Language already locked in by _greet — only update if not yet confirmed
             if not self.state.lang_confirmed:
                 self.state.caller_lang = detected_lang
                 if self.state.turn_count >= 1:
