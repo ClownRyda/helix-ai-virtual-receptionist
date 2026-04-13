@@ -320,14 +320,16 @@ class CallHandler:
         """Build the greeting string for the given language."""
         greetings = {
             "en": (
-                f"Thank you for calling {settings.business_name}, "
-                f"we are excited to speak with you. "
-                f"This is {settings.agent_name}. How can I help you today?"
+                f"Thank you for calling {settings.business_name}, we are excited to speak with you. "
+                f"This is {settings.agent_name}, your virtual assistant. "
+                f"There are no buttons to press — just speak to me naturally and I will take care of you. "
+                f"How can I help you today?"
             ),
             "es": (
-                f"Gracias por llamar a {settings.business_name}, "
-                f"estamos muy contentos de hablar con usted. "
-                f"Le habla {settings.agent_name}. \u00bfEn qu\u00e9 le puedo ayudar hoy?"
+                f"Gracias por llamar a {settings.business_name}, estamos muy contentos de hablar con usted. "
+                f"Le habla {settings.agent_name}, su asistente virtual. "
+                f"No hay botones que presionar — h\u00e1bleme con naturalidad y yo me encargar\u00e9 de usted. "
+                f"\u00bfEn qu\u00e9 le puedo ayudar hoy?"
             ),
         }
         return greetings.get(lang, greetings["en"])
