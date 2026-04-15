@@ -4,7 +4,67 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.3
+## [latest] → v1.4
+
+---
+
+## [v1.4] — 2026-04-15
+
+### Summary
+Full 7-language support: French, Italian, German, Romanian, and Hebrew added alongside
+existing English and Spanish. Every part of the audio path is language-aware — Whisper
+auto-detects the caller's language, all greetings, retry prompts, after-hours messages,
+voicemail prompts, DTMF menus, and operator-fallback messages are spoken in the detected
+language. Piper TTS serves FR/IT/DE/RO; Hebrew falls back to espeak-ng (no Piper voice
+exists for Hebrew).
+
+### Added
+- `agent/config.py` — new Piper model settings: `PIPER_MODEL_FR`, `PIPER_MODEL_IT`,
+  `PIPER_MODEL_DE`, `PIPER_MODEL_RO`, `PIPER_MODEL_HE` (empty, routes to espeak-ng)
+- `agent/config.py` — `SUPPORTED_LANGUAGES` default updated from `en,es` to `en,es,fr,it,de,ro,he`
+- `agent/tts/piper_engine.py` — `LANG_MODEL_ATTR` dict maps all 7 language codes to
+  their settings attribute; `ESPEAK_VOICES` dict handles languages without Piper support
+- `agent/tts/piper_engine.py` — `_get_model_name()` helper resolves model per language;
+  `synthesize_pcm()` now routes to `_synthesize_espeak()` for Hebrew automatically
+- `agent/tts/piper_engine.py` — `_synthesize_espeak()` — new function; invokes espeak-ng,
+  strips WAV header, resamples to 16kHz, returns raw PCM16 for Asterisk
+- `agent/llm/translate_engine.py` — `LANG_NAMES` dict covers all 7 languages;
+  `DETECT_PROMPT` updated to list all 7 codes as examples; `SUPPORTED_LANGS` expanded
+- `agent/ari_agent.py` — `_after_hours_closed_msg()` — new helper returns closed message in
+  caller's language (7 languages)
+- `agent/ari_agent.py` — all after-hours append messages (emergency/voicemail/callback/schedule)
+  localized in 7 languages
+- `agent/ari_agent.py` — `_build_greeting()` — main and after-hours greetings in 7 languages
+- `agent/ari_agent.py` — retry prompts (first and subsequent silences) in 7 languages
+- `agent/ari_agent.py` — unknown-intent rephrase prompt in 7 languages
+- `agent/ari_agent.py` — voicemail "please leave a message" and "thank you" prompts in 7 languages
+- `agent/ari_agent.py` — DTMF invalid-option and connecting messages in 7 languages
+- `agent/ari_agent.py` — operator-fallback message in 7 languages
+- `agent/.env.example` — all 5 new Piper model vars documented
+- `docker/Dockerfile.agent` — `espeak-ng` added to apt packages; all 5 new Piper
+  voice models downloaded at image build time (FR/IT/DE/RO)
+- `docker/Dockerfile.agent.windows` — same additions
+- `scripts/onboard.sh` — downloads all 6 Piper voice models (EN/ES/FR/IT/DE/RO);
+  installs espeak-ng for Hebrew via apt-get
+- `scripts/onboard-windows.ps1` — notes that Docker handles model downloads;
+  mentions espeak-ng is pre-installed in the Docker image
+
+### Voice model choices (Piper HuggingFace)
+| Language | Model | Quality |
+|---|---|---|
+| English | `en_US-lessac-medium` | medium |
+| Spanish | `es_MX-claude-high` | high |
+| French | `fr_FR-siwis-medium` | medium |
+| Italian | `it_IT-paola-medium` | medium |
+| German | `de_DE-thorsten-medium` | medium |
+| Romanian | `ro_RO-mihai-medium` | medium |
+| Hebrew | espeak-ng `he` | fallback (no Piper voice available) |
+
+### Notes
+- Language detection is handled by Whisper's multilingual model — no configuration needed
+- All new languages degrade gracefully: if a model is missing, agent logs a warning and
+  falls back to English
+- Translation path is unchanged: caller speech → English for LLM → back to caller's language for TTS
 
 ---
 

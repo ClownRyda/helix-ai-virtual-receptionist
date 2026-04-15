@@ -42,10 +42,16 @@ class Settings(BaseSettings):
     # ── Piper TTS ───────────────────────────────────────────────
     piper_model: str = Field("en_US-lessac-medium", env="PIPER_MODEL")
     piper_model_es: str = Field("es_MX-claude-high", env="PIPER_MODEL_ES")
+    piper_model_fr: str = Field("fr_FR-siwis-medium", env="PIPER_MODEL_FR")
+    piper_model_it: str = Field("it_IT-paola-medium", env="PIPER_MODEL_IT")
+    piper_model_de: str = Field("de_DE-thorsten-medium", env="PIPER_MODEL_DE")
+    piper_model_ro: str = Field("ro_RO-mihai-medium", env="PIPER_MODEL_RO")
+    # Hebrew: no Piper voice available — espeak-ng is used as fallback
+    piper_model_he: str = Field("", env="PIPER_MODEL_HE")
     piper_model_path: str = Field("/opt/piper/models", env="PIPER_MODEL_PATH")
 
-    # ── Bilingual / translation ──────────────────────────────────
-    supported_languages: str = Field("en,es", env="SUPPORTED_LANGUAGES")
+    # ── Multilingual / translation ───────────────────────────────
+    supported_languages: str = Field("en,es,fr,it,de,ro,he", env="SUPPORTED_LANGUAGES")
     auto_detect_language: bool = Field(True, env="AUTO_DETECT_LANGUAGE")
     whisper_model_multilingual: str = Field("base", env="WHISPER_MODEL_MULTILINGUAL")
 

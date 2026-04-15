@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.3-cyan)
+![Version](https://img.shields.io/badge/version-v1.4-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -9,7 +9,7 @@
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history. · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
 
-A fully local, self-hosted AI phone receptionist. Answers calls, respects your business hours, handles after-hours callers gracefully, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, speaks English and Spanish — all without any cloud APIs.
+A fully local, self-hosted AI phone receptionist. Answers calls, respects your business hours, handles after-hours callers gracefully, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, speaks 7 languages (EN, ES, FR, IT, DE, RO, HE) — all without any cloud APIs.
 
 **Server:** Ubuntu 22.04 + RTX 4090 GPU  
 **Testing:** Docker Desktop on Windows or native install on Ubuntu  
@@ -34,7 +34,7 @@ Business hours / holiday check
       ↓
 AI greets caller in English
       ↓
-Whisper detects language (EN or ES)
+Whisper detects language (EN, ES, FR, IT, DE, RO, HE)
 If Spanish → replay greeting in Spanish
       ↓
 DTMF menu announced (if enabled) — press 1/2/0 or just speak
@@ -98,7 +98,7 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
 
 ### Bilingual EN / ES support
 - Greeting plays in English; Whisper detects language from caller's first response
-- If Spanish detected → greeting replays in Spanish; full conversation continues in Spanish
+- If a non-English language is detected (ES, FR, IT, DE, RO, HE) → greeting replays in that language; full conversation continues in the caller's language
 - Greeting tells caller "no buttons to press — just speak naturally"
 - All AI responses generated directly in the caller's detected language
 
@@ -120,7 +120,7 @@ Agent (EN) ──speaks──▶ agent_snoop channel
 Two isolated snoop channels prevent audio mixing. Relay only starts when `caller_lang ≠ agent_lang` — same-language transfers have zero overhead.
 
 ### Retry / fallback logic
-- Silence → bilingual retry prompt ("I didn't catch that — could you repeat?")
+- Silence → localized retry prompt in caller's language ("I didn't catch that…" in EN/ES/FR/IT/DE/RO/HE)
 - After `MAX_RETRIES` consecutive silences → graceful transfer to operator
 - After 2 consecutive unknown/unclear intents → graceful transfer to operator
 - No dead air — the caller always hears a spoken handoff
@@ -274,6 +274,11 @@ cp agent/.env.example agent/.env
 | `OLLAMA_MODEL` | `llama3.1:8b` | Model for intent, conversation, translation |
 | `PIPER_MODEL` | `en_US-lessac-medium` | English TTS voice |
 | `PIPER_MODEL_ES` | `es_MX-claude-high` | Spanish TTS voice |
+| `PIPER_MODEL_FR` | `fr_FR-siwis-medium` | French TTS voice |
+| `PIPER_MODEL_IT` | `it_IT-paola-medium` | Italian TTS voice |
+| `PIPER_MODEL_DE` | `de_DE-thorsten-medium` | German TTS voice |
+| `PIPER_MODEL_RO` | `ro_RO-mihai-medium` | Romanian TTS voice |
+| `PIPER_MODEL_HE` | _(espeak-ng fallback)_ | Hebrew TTS (no Piper model available) |
 | `AUTO_DETECT_LANGUAGE` | `true` | Auto-detect caller language via Whisper |
 
 #### Business hours & after-hours

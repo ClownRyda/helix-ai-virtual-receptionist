@@ -375,61 +375,115 @@ class CallHandler:
 
     # ── After-hours handler ───────────────────────────────────────────────────
 
+    # ── Localized message helpers ─────────────────────────────────────────────
+
+    def _after_hours_closed_msg(self, lang: str) -> str:
+        """Return after-hours closed message in the caller's language."""
+        start_h = settings.business_hours_start
+        end_h   = settings.business_hours_end
+        pm_end  = end_h - 12 if end_h > 12 else end_h
+        am_pm   = "PM" if end_h >= 12 else "AM"
+        name    = settings.business_name
+
+        msgs = {
+            "en": (f"Thank you for calling {name}. Our office is currently closed. "
+                   f"Our business hours are Monday through Friday, "
+                   f"{start_h}:00 AM to {pm_end}:00 {am_pm}."),
+            "es": (f"Gracias por llamar a {name}. Nuestra oficina está cerrada en este momento. "
+                   f"Nuestro horario es de lunes a viernes, de {start_h}:00 a {pm_end}:00."),
+            "fr": (f"Merci d'avoir appelé {name}. Notre bureau est actuellement fermé. "
+                   f"Nos heures d'ouverture sont du lundi au vendredi, "
+                   f"de {start_h}h00 à {pm_end}h00."),
+            "it": (f"Grazie per aver chiamato {name}. Il nostro ufficio è attualmente chiuso. "
+                   f"Il nostro orario è dal lunedì al venerdì, dalle {start_h}:00 alle {pm_end}:00."),
+            "de": (f"Vielen Dank für Ihren Anruf bei {name}. Unser Büro ist derzeit geschlossen. "
+                   f"Unsere Geschäftszeiten sind Montag bis Freitag, "
+                   f"{start_h}:00 Uhr bis {pm_end}:00 Uhr."),
+            "ro": (f"Vă mulțumim că ați sunat la {name}. Biroul nostru este în prezent închis. "
+                   f"Programul nostru este luni până vineri, "
+                   f"de la {start_h}:00 până la {pm_end}:00."),
+            "he": (f"תודה שהתקשרת ל{name}. המשרד שלנו סגור כרגע. "
+                   f"שעות הפעילות שלנו הן ימי שני עד שישי, "
+                   f"מ-{start_h}:00 עד {pm_end}:00."),
+        }
+        return msgs.get(lang, msgs["en"])
+
     async def _handle_after_hours(self):
         """
         Called when the business is closed.
-        Speaks a closed message, then branches on AFTER_HOURS_MODE.
+        Speaks a closed message in the caller's language, then branches on AFTER_HOURS_MODE.
         """
-        tz = ZoneInfo(settings.business_timezone)
-        now = datetime.now(tz)
-        # Use a friendly hours description
-        start_h = settings.business_hours_start
-        end_h = settings.business_hours_end
-        hours_str_en = f"{start_h}:00 AM to {end_h - 12 if end_h > 12 else end_h}:00 {'PM' if end_h >= 12 else 'AM'}"
-        hours_str_es = f"{start_h}:00 AM a {end_h - 12 if end_h > 12 else end_h}:00 {'PM' if end_h >= 12 else 'AM'}"
-
-        msg_en = (
-            f"Thank you for calling {settings.business_name}. "
-            f"Our office is currently closed. "
-            f"Our business hours are Monday through Friday, {hours_str_en}."
-        )
-        msg_es = (
-            f"Gracias por llamar a {settings.business_name}. "
-            f"Nuestra oficina está cerrada en este momento. "
-            f"Nuestro horario de atención es de lunes a viernes, de {hours_str_es}."
-        )
-
         mode = settings.after_hours_mode
-        lang = "en"  # default — we haven't detected caller lang yet
+        lang = self.state.caller_lang  # may be "en" if not yet detected
+
+        base_msg = self._after_hours_closed_msg(lang)
+
+        append = {
+            "emergency": {
+                "en": " If this is an emergency, please hold while I connect you.",
+                "es": " Si es una emergencia, por favor espere mientras le conecto.",
+                "fr": " En cas d'urgence, veuillez patienter, je vous mets en relation.",
+                "it": " In caso di emergenza, rimanga in linea mentre la collego.",
+                "de": " Im Notfall bleiben Sie bitte in der Leitung, ich verbinde Sie.",
+                "ro": " În caz de urgență, vă rugăm să rămâneți pe linie în timp ce vă transfer.",
+                "he": " במקרה חירום, אנא המתן בזמן שאני מחבר אותך.",
+            },
+            "voicemail": {
+                "en": " Please leave a message after the tone and we will call you back next business day.",
+                "es": " Por favor, deje un mensaje después del tono y le devolveremos la llamada el próximo día hábil.",
+                "fr": " Veuillez laisser un message après le bip et nous vous rappellerons le prochain jour ouvrable.",
+                "it": " Per favore, lasci un messaggio dopo il segnale acustico e la richiameremo il prossimo giorno lavorativo.",
+                "de": " Bitte hinterlassen Sie nach dem Piepton eine Nachricht, und wir rufen Sie am nächsten Werktag zurück.",
+                "ro": " Vă rugăm să lăsați un mesaj după semnal și vă vom suna înapoi în următoarea zi lucrătoare.",
+                "he": " אנא השאר הודעה לאחר הצפצוף ונחזור אליך ביום העסקים הבא.",
+            },
+            "callback": {
+                "en": " Please call back during our business hours or visit our website.",
+                "es": " Por favor, llámenos durante nuestro horario de atención o visita nuestro sitio web.",
+                "fr": " Veuillez rappeler pendant nos heures d'ouverture ou visiter notre site web.",
+                "it": " La preghiamo di richiamare durante l'orario di lavoro o di visitare il nostro sito web.",
+                "de": " Bitte rufen Sie während unserer Geschäftszeiten zurück oder besuchen Sie unsere Website.",
+                "ro": " Vă rugăm să sunați înapoi în timpul programului nostru de lucru sau să vizitați site-ul nostru web.",
+                "he": " אנא התקשר שוב בשעות הפעילות שלנו או בקר באתר האינטרנט שלנו.",
+            },
+            "schedule": {
+                "en": " You can schedule a callback appointment with me now.",
+                "es": " Puede programar una cita de devolución de llamada conmigo ahora.",
+                "fr": " Vous pouvez planifier un rendez-vous de rappel avec moi maintenant.",
+                "it": " Può fissare un appuntamento di richiamata con me adesso.",
+                "de": " Sie können jetzt einen Rückruftermin bei mir buchen.",
+                "ro": " Puteți programa acum o programare de apel invers cu mine.",
+                "he": " אתה יכול לקבוע פגישת התקשרות חוזרת איתי עכשיו.",
+            },
+        }
 
         if mode == "emergency":
             route = get_after_hours_route()
-            msg_en += " If this is an emergency, please hold while I connect you."
-            await self._speak(msg_en, language="en")
+            msg = base_msg + append["emergency"].get(lang, append["emergency"]["en"])
+            await self._speak(msg, language=lang)
             await asyncio.sleep(1)
             await self.ari.redirect_channel(self.channel_id, f"PJSIP/{route.extension}")
             await self._save_call(disposition="after_hours", transferred_to=route.extension)
 
         elif mode == "voicemail":
             if settings.voicemail_enabled:
-                msg_en += " Please leave a message after the tone and we will call you back next business day."
-                await self._speak(msg_en, language="en")
+                msg = base_msg + append["voicemail"].get(lang, append["voicemail"]["en"])
+                await self._speak(msg, language=lang)
                 await self._record_voicemail()
             else:
-                msg_en += " Please call back during business hours."
-                await self._speak(msg_en, language="en")
+                msg = base_msg + append["callback"].get(lang, append["callback"]["en"])
+                await self._speak(msg, language=lang)
                 await self._save_call(disposition="after_hours")
 
         elif mode == "schedule":
-            # Let the caller book a callback slot — enter the normal greeting flow
-            msg_en += " You can schedule a callback appointment with me now."
-            await self._speak(msg_en, language="en")
+            msg = base_msg + append["schedule"].get(lang, append["schedule"]["en"])
+            await self._speak(msg, language=lang)
             await self._greet(after_hours=True)
             await self._conversation_loop(after_hours=True)
 
         else:  # callback (default)
-            msg_en += " Please call back during our business hours or visit our website."
-            await self._speak(msg_en, language="en")
+            msg = base_msg + append["callback"].get(lang, append["callback"]["en"])
+            await self._speak(msg, language=lang)
             await self._save_call(disposition="after_hours")
 
     # ── Voicemail recording ───────────────────────────────────────────────────
@@ -449,7 +503,17 @@ class CallHandler:
         filepath = os.path.join(vm_dir, filename)
 
         self.call_path.record("voicemail_start", path=filepath)
-        await self._speak("Please leave your message now.", language="en")
+        lang = self.state.caller_lang
+        vm_prompts = {
+            "en": "Please leave your message now.",
+            "es": "Por favor, deje su mensaje ahora.",
+            "fr": "Veuillez laisser votre message maintenant.",
+            "it": "Per favore, lasci il suo messaggio ora.",
+            "de": "Bitte hinterlassen Sie jetzt Ihre Nachricht.",
+            "ro": "Vă rugăm să lăsați mesajul dvs. acum.",
+            "he": "אנא השאר את ההודעה שלך עכשיו.",
+        }
+        await self._speak(vm_prompts.get(lang, vm_prompts["en"]), language=lang)
         await asyncio.sleep(0.5)
 
         # Record up to 120 seconds
@@ -524,7 +588,16 @@ class CallHandler:
             db.add(vm)
             await db.commit()
 
-        await self._speak("Thank you. We will call you back next business day.", language="en")
+        vm_thanks = {
+            "en": "Thank you. We will call you back next business day.",
+            "es": "Gracias. Le devolvemos la llamada el próximo día hábil.",
+            "fr": "Merci. Nous vous rappellerons le prochain jour ouvrable.",
+            "it": "Grazie. La richiameremo il prossimo giorno lavorativo.",
+            "de": "Vielen Dank. Wir rufen Sie am nächsten Werktag zurück.",
+            "ro": "Mulțumim. Vă vom contacta în următoarea zi lucrătoare.",
+            "he": "תודה. נחזור אליך ביום העסקים הבא.",
+        }
+        await self._speak(vm_thanks.get(lang, vm_thanks["en"]), language=lang)
         await self._save_call(disposition="voicemail")
         self.call_path.record("voicemail_saved", duration=duration, transcript=bool(transcript))
 
@@ -578,6 +651,9 @@ class CallHandler:
         self._first_utterance = (utterance, detected_lang)
 
     def _build_greeting(self, lang: str, after_hours: bool = False) -> str:
+        name  = settings.business_name
+        agent = settings.agent_name
+
         if after_hours:
             greetings = {
                 "en": (
@@ -590,20 +666,75 @@ class CallHandler:
                     f"No hay botones que presionar — hableme con naturalidad. "
                     f"¿Cuál es su nombre y el motivo de su llamada?"
                 ),
+                "fr": (
+                    f"Je peux planifier un rendez-vous de rappel pour vous. "
+                    f"Il n'y a pas de touches à appuyer — parlez-moi naturellement. "
+                    f"Quel est votre nom et le motif de votre appel ?"
+                ),
+                "it": (
+                    f"Posso fissare un appuntamento di richiamata per lei. "
+                    f"Non ci sono tasti da premere — mi parli liberamente. "
+                    f"Qual è il suo nome e il motivo della sua chiamata?"
+                ),
+                "de": (
+                    f"Ich kann einen Rückruftermin für Sie vereinbaren. "
+                    f"Es gibt keine Tasten zu drücken — sprechen Sie einfach natürlich mit mir. "
+                    f"Wie ist Ihr Name und was ist der Grund Ihres Anrufs?"
+                ),
+                "ro": (
+                    f"Pot programa o programare de apel invers pentru dumneavoastră. "
+                    f"Nu există taste de apăsat — vorbiți-mi natural. "
+                    f"Care este numele dvs. și motivul apelului?"
+                ),
+                "he": (
+                    f"אני יכול לקבוע פגישת התקשרות חוזרת עבורך. "
+                    f"אין צורך ללחוץ על מקשים — פשוט דבר איתי בטבעיות. "
+                    f"מה שמך וסיבת השיחה?"
+                ),
             }
         else:
             greetings = {
                 "en": (
-                    f"Thank you for calling {settings.business_name}, we are excited to speak with you. "
-                    f"This is {settings.agent_name}, your virtual assistant. "
+                    f"Thank you for calling {name}, we are excited to speak with you. "
+                    f"This is {agent}, your virtual assistant. "
                     f"There are no buttons to press — just speak to me naturally and I will take care of you. "
                     f"How can I help you today?"
                 ),
                 "es": (
-                    f"Gracias por llamar a {settings.business_name}, estamos muy contentos de hablar con usted. "
-                    f"Le habla {settings.agent_name}, su asistente virtual. "
+                    f"Gracias por llamar a {name}, estamos muy contentos de hablar con usted. "
+                    f"Le habla {agent}, su asistente virtual. "
                     f"No hay botones que presionar — hábleme con naturalidad y yo me encargaré de usted. "
                     f"¿En qué le puedo ayudar hoy?"
+                ),
+                "fr": (
+                    f"Merci d'avoir appelé {name}, nous sommes ravis de vous parler. "
+                    f"Je suis {agent}, votre assistant virtuel. "
+                    f"Il n'y a pas de touches à appuyer — parlez-moi simplement et je m'occuperai de vous. "
+                    f"Comment puis-je vous aider aujourd'hui ?"
+                ),
+                "it": (
+                    f"Grazie per aver chiamato {name}, siamo lieti di parlare con lei. "
+                    f"Sono {agent}, il suo assistente virtuale. "
+                    f"Non ci sono tasti da premere — mi parli liberamente e mi occuperò di lei. "
+                    f"Come posso aiutarla oggi?"
+                ),
+                "de": (
+                    f"Vielen Dank für Ihren Anruf bei {name}, wir freuen uns, mit Ihnen zu sprechen. "
+                    f"Hier ist {agent}, Ihr virtueller Assistent. "
+                    f"Es gibt keine Tasten zu drücken — sprechen Sie einfach natürlich mit mir. "
+                    f"Wie kann ich Ihnen heute helfen?"
+                ),
+                "ro": (
+                    f"Vă mulțumim că ați sunat la {name}, suntem încântați să vă vorbim. "
+                    f"Sunt {agent}, asistentul dvs. virtual. "
+                    f"Nu există taste de apăsat — vorbiți-mi natural și mă voi ocupa de dvs. "
+                    f"Cu ce vă pot ajuta astăzi?"
+                ),
+                "he": (
+                    f"תודה שהתקשרת ל-{name}, אנחנו שמחים לדבר איתך. "
+                    f"אני {agent}, העוזר הווירטואלי שלך. "
+                    f"אין צורך ללחוץ על מקשים — פשוט דבר איתי בטבעיות ואני אדאג לך. "
+                    f"איך אני יכול לעזור לך היום?"
                 ),
             }
         return greetings.get(lang, greetings["en"])
@@ -643,16 +774,28 @@ class CallHandler:
                     return
 
                 # Retry prompt (bilingual)
+                RETRY_FIRST = {
+                    "en": "I'm sorry, I didn't catch that. Could you repeat?",
+                    "es": "Lo siento, no le escuché. ¿Puede repetir?",
+                    "fr": "Je suis désolé, je n'ai pas entendu. Pouvez-vous répéter ?",
+                    "it": "Mi dispiace, non ho sentito. Può ripetere?",
+                    "de": "Entschuldigung, ich habe das nicht verstanden. Könnten Sie das wiederholen?",
+                    "ro": "Îmi pare rău, nu am auzit. Puteți repeta?",
+                    "he": "סליחה, לא שמעתי. האם תוכל לחזור על כך?",
+                }
+                RETRY_AGAIN = {
+                    "en": "I'm sorry, I didn't catch that. Could you try again?",
+                    "es": "Disculpe, no le escuché bien. ¿Puede intentarlo de nuevo?",
+                    "fr": "Désolé, je n'ai pas bien saisi. Pouvez-vous réessayer ?",
+                    "it": "Mi dispiace, non ho capito bene. Può riprovare?",
+                    "de": "Entschuldigung, ich habe das nicht richtig verstanden. Könnten Sie es nochmals versuchen?",
+                    "ro": "Îmi pare rău, nu am înțeles bine. Puteți încerca din nou?",
+                    "he": "סליחה, לא הבנתי טוב. האם תוכל לנסות שוב?",
+                }
                 if self.state.turn_count == 0:
-                    sorry = (
-                        "Lo siento, no le escuché. ¿Puede repetir?" if lang == "es"
-                        else "I'm sorry, I didn't catch that. Could you repeat?"
-                    )
+                    sorry = RETRY_FIRST.get(lang, RETRY_FIRST["en"])
                 else:
-                    sorry = (
-                        "Disculpe, no le escuché bien. ¿Puede intentarlo de nuevo?" if lang == "es"
-                        else "I'm sorry, I didn't catch that. Could you try again?"
-                    )
+                    sorry = RETRY_AGAIN.get(lang, RETRY_AGAIN["en"])
                 await self._speak(sorry, language=lang)
                 continue
 
@@ -683,12 +826,23 @@ class CallHandler:
                     return
 
                 # Reprompt
-                rephrase = (
-                    "No entendí del todo. ¿Puede decirme si desea hablar con alguien, "
-                    "programar una cita o tiene una pregunta?" if lang == "es"
-                    else "I didn't quite catch that. Are you looking to speak with someone, "
-                         "schedule an appointment, or do you have a question?"
-                )
+                REPHRASE = {
+                    "en": ("I didn't quite catch that. Are you looking to speak with someone, "
+                           "schedule an appointment, or do you have a question?"),
+                    "es": ("No entendí del todo. ¿Puede decirme si desea hablar con alguien, "
+                           "programar una cita o tiene una pregunta?"),
+                    "fr": ("Je n'ai pas bien compris. Souhaitez-vous parler à quelqu'un, "
+                           "prendre un rendez-vous, ou avez-vous une question ?"),
+                    "it": ("Non ho capito bene. Desidera parlare con qualcuno, "
+                           "fissare un appuntamento, o ha una domanda?"),
+                    "de": ("Ich habe das nicht ganz verstanden. Möchten Sie mit jemandem sprechen, "
+                           "einen Termin vereinbaren oder haben Sie eine Frage?"),
+                    "ro": ("Nu am înțeles bine. Doriți să vorbiți cu cineva, "
+                           "să programați o întâlnire sau aveți o întrebare?"),
+                    "he": ("לא הבנתי לגמרי. האם אתה מחפש לדבר עם מישהו, "
+                           "לקבוע תור או שיש לך שאלה?"),
+                }
+                rephrase = REPHRASE.get(lang, REPHRASE["en"])
                 await self._speak(rephrase, language=lang)
                 continue
 
@@ -832,18 +986,28 @@ class CallHandler:
         self.call_path.record("dtmf", digit=digit, extension=extension)
 
         if not extension:
-            await self._speak(
-                "Esa opción no es válida. Le paso al operador." if lang == "es"
-                else "That option isn't valid. Connecting you to the operator.",
-                language=lang,
-            )
+            DTMF_INVALID = {
+                "en": "That option isn't valid. Connecting you to the operator.",
+                "es": "Esa opción no es válida. Le paso al operador.",
+                "fr": "Cette option n'est pas valide. Je vous passe l'opérateur.",
+                "it": "Questa opzione non è valida. La metto in contatto con l'operatore.",
+                "de": "Diese Option ist nicht gültig. Ich verbinde Sie mit dem Operator.",
+                "ro": "Această opțiune nu este validă. Vă transfer la operator.",
+                "he": "האפשרות הזו אינה חוקית. מחבר אותך לאופרטור.",
+            }
+            await self._speak(DTMF_INVALID.get(lang, DTMF_INVALID["en"]), language=lang)
             extension = settings.operator_extension
 
-        await self._speak(
-            f"Un momento, le comunico ahora mismo." if lang == "es"
-            else "One moment, connecting you now.",
-            language=lang,
-        )
+        DTMF_CONNECTING = {
+            "en": "One moment, connecting you now.",
+            "es": "Un momento, le comunico ahora mismo.",
+            "fr": "Un instant, je vous mets en relation.",
+            "it": "Un momento, la metto in contatto adesso.",
+            "de": "Einen Moment, ich verbinde Sie jetzt.",
+            "ro": "Un moment, vă transfer acum.",
+            "he": "רגע, מחבר אותך עכשיו.",
+        }
+        await self._speak(DTMF_CONNECTING.get(lang, DTMF_CONNECTING["en"]), language=lang)
         await asyncio.sleep(0.5)
         await self.ari.redirect_channel(self.channel_id, f"PJSIP/{extension}")
         await self._save_call(disposition="transferred", transferred_to=extension)
@@ -857,12 +1021,16 @@ class CallHandler:
         self.call_path.record("operator_fallback", reason=reason)
         log.info("Operator fallback", call_id=self.call_id, reason=reason)
 
-        msg = (
-            "Permítame conectarle con un miembro de nuestro equipo que podrá ayudarle."
-            if lang == "es"
-            else "Let me connect you with a team member who can assist you better."
-        )
-        await self._speak(msg, language=lang)
+        FALLBACK_MSG = {
+            "en": "Let me connect you with a team member who can assist you better.",
+            "es": "Permítame conectarle con un miembro de nuestro equipo que podrá ayudarle.",
+            "fr": "Laissez-moi vous mettre en relation avec un membre de notre équipe qui pourra mieux vous aider.",
+            "it": "Lasci che la metta in contatto con un membro del team che potrà assisterla meglio.",
+            "de": "Lassen Sie mich Sie mit einem Teammitglied verbinden, das Ihnen besser helfen kann.",
+            "ro": "Permiteți-mi să vă conectez cu un membru al echipei care vă poate ajuta mai bine.",
+            "he": "הרשה לי לחבר אותך עם חבר צוות שיוכל לסייע לך טוב יותר.",
+        }
+        await self._speak(FALLBACK_MSG.get(lang, FALLBACK_MSG["en"]), language=lang)
         await asyncio.sleep(0.5)
 
         ext = settings.operator_extension

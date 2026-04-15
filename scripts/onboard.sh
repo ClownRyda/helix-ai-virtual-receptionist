@@ -455,27 +455,42 @@ if [[ "$DEPLOY_MODE" == "native" ]]; then
     section "Downloading Piper voice models"
     sudo mkdir -p "$PIPER_MODEL_DIR"
 
-    if [[ ! -f "$PIPER_MODEL_DIR/en_US-lessac-medium.onnx" ]]; then
-        info "Downloading English voice model..."
-        sudo wget -q "${HF_BASE}/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
-            -O "$PIPER_MODEL_DIR/en_US-lessac-medium.onnx"
-        sudo wget -q "${HF_BASE}/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json" \
-            -O "$PIPER_MODEL_DIR/en_US-lessac-medium.onnx.json"
-        log "English voice model downloaded"
-    else
-        log "English voice model already present"
-    fi
+    # Each entry: "display_name" "model_name" "hf_path"
+    declare -a VOICE_MODELS=(
+        "English"           "en_US-lessac-medium"    "en/en_US/lessac/medium/en_US-lessac-medium"
+        "Spanish (Mexico)"  "es_MX-claude-high"      "es/es_MX/claude/high/es_MX-claude-high"
+        "French"            "fr_FR-siwis-medium"     "fr/fr_FR/siwis/medium/fr_FR-siwis-medium"
+        "Italian"           "it_IT-paola-medium"     "it/it_IT/paola/medium/it_IT-paola-medium"
+        "German"            "de_DE-thorsten-medium"  "de/de_DE/thorsten/medium/de_DE-thorsten-medium"
+        "Romanian"          "ro_RO-mihai-medium"     "ro/ro_RO/mihai/medium/ro_RO-mihai-medium"
+    )
+    # Hebrew uses espeak-ng — no Piper model to download
 
-    if [[ ! -f "$PIPER_MODEL_DIR/es_MX-claude-high.onnx" ]]; then
-        info "Downloading Spanish (Mexico) voice model..."
-        sudo wget -q "${HF_BASE}/es/es_MX/claude/high/es_MX-claude-high.onnx" \
-            -O "$PIPER_MODEL_DIR/es_MX-claude-high.onnx"
-        sudo wget -q "${HF_BASE}/es/es_MX/claude/high/es_MX-claude-high.onnx.json" \
-            -O "$PIPER_MODEL_DIR/es_MX-claude-high.onnx.json"
-        log "Spanish voice model downloaded"
-    else
-        log "Spanish voice model already present"
+    local i=0
+    while (( i < ${#VOICE_MODELS[@]} )); do
+        local display="${VOICE_MODELS[$i]}"
+        local model="${VOICE_MODELS[$((i+1))]}"
+        local hf_path="${VOICE_MODELS[$((i+2))]}"
+
+        if [[ ! -f "$PIPER_MODEL_DIR/${model}.onnx" ]]; then
+            info "Downloading ${display} voice model..."
+            sudo wget -q "${HF_BASE}/${hf_path}.onnx" \
+                -O "$PIPER_MODEL_DIR/${model}.onnx"
+            sudo wget -q "${HF_BASE}/${hf_path}.onnx.json" \
+                -O "$PIPER_MODEL_DIR/${model}.onnx.json"
+            log "${display} voice model downloaded"
+        else
+            log "${display} voice model already present"
+        fi
+        i=$(( i + 3 ))
+    done
+
+    # Check espeak-ng for Hebrew TTS
+    if ! command -v espeak-ng &>/dev/null; then
+        info "Installing espeak-ng (Hebrew TTS fallback)..."
+        sudo apt-get install -y espeak-ng 2>/dev/null || warn "espeak-ng install failed — Hebrew TTS will be silent"
     fi
+    log "Hebrew TTS (espeak-ng): $(espeak-ng --version 2>&1 | head -1)"
 
     section "Installing Python dependencies"
     cd "$REPO_ROOT/agent"

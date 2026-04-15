@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
     libsndfile1 \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Set python3.12 as default
@@ -45,7 +46,31 @@ RUN mkdir -p /opt/piper/models && \
     -O /opt/piper/models/es_MX-claude-high.onnx && \
     wget -q \
     https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json \
-    -O /opt/piper/models/es_MX-claude-high.onnx.json
+    -O /opt/piper/models/es_MX-claude-high.onnx.json && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx \
+    -O /opt/piper/models/fr_FR-siwis-medium.onnx && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json \
+    -O /opt/piper/models/fr_FR-siwis-medium.onnx.json && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/it/it_IT/paola/medium/it_IT-paola-medium.onnx \
+    -O /opt/piper/models/it_IT-paola-medium.onnx && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/it/it_IT/paola/medium/it_IT-paola-medium.onnx.json \
+    -O /opt/piper/models/it_IT-paola-medium.onnx.json && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx \
+    -O /opt/piper/models/de_DE-thorsten-medium.onnx && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json \
+    -O /opt/piper/models/de_DE-thorsten-medium.onnx.json && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx \
+    -O /opt/piper/models/ro_RO-mihai-medium.onnx && \
+    wget -q \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx.json \
+    -O /opt/piper/models/ro_RO-mihai-medium.onnx.json
 
 WORKDIR /app
 

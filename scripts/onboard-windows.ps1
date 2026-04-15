@@ -305,6 +305,13 @@ foreach ($confFile in @($PjsipConf, $PjsipWin)) {
 # ═════════════════════════════════════════════════════════════════════════════
 Header "Step 7 of 7 — Launch & Validate"
 
+# ── Voice model note for Windows users ──────────────────────────────────────
+Write-Host ""
+Info "Voice models (Piper TTS) are downloaded automatically when the Docker containers start."
+Info "Supported voices: English, Spanish, French, Italian, German, Romanian."
+Info "Hebrew uses espeak-ng (pre-installed in the Docker image)."
+Write-Host ""
+
 $LaunchNow = Prompt-YN "Start Helix AI now with Docker Compose?" "y"
 if ($LaunchNow) {
     Info "Building and starting containers (first run may take several minutes)..."

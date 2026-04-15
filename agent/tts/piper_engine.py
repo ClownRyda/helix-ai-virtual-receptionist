@@ -17,20 +17,40 @@ PIPER_SAMPLE_RATE = 22050
 ASTERISK_SAMPLE_RATE = 16000
 
 
-# Language → Piper model name mapping
-LANG_MODELS = {
-    "en": None,   # None = use settings.piper_model (default English)
-    "es": None,   # None = use settings.piper_model_es (Spanish)
+# Maps language code → settings attribute holding the Piper model name.
+# If the attribute resolves to an empty string, espeak-ng fallback is used.
+LANG_MODEL_ATTR = {
+    "en": "piper_model",
+    "es": "piper_model_es",
+    "fr": "piper_model_fr",
+    "it": "piper_model_it",
+    "de": "piper_model_de",
+    "ro": "piper_model_ro",
+    "he": "piper_model_he",   # empty string — routes to espeak-ng
 }
+
+# espeak-ng voice tags for languages without Piper support
+ESPEAK_VOICES = {
+    "he": "he",  # Hebrew
+}
+
+
+def _get_model_name(language: str) -> str:
+    """Resolve Piper model name for a language code. Returns '' if not configured."""
+    attr = LANG_MODEL_ATTR.get(language, "piper_model")
+    return getattr(settings, attr, "") or ""
 
 
 def synthesize_pcm(text: str, language: str = "en") -> bytes:
     """
     Synthesize text to raw PCM16 audio at 16kHz (slin16) for Asterisk.
 
+    Selects the correct Piper voice for the detected language.
+    Falls back to espeak-ng for languages without a Piper model (e.g. Hebrew).
+
     Args:
         text: Text to speak
-        language: Language code ('en' or 'es') — selects the right Piper voice
+        language: ISO 639-1 language code
 
     Returns:
         Raw 16-bit signed PCM bytes at 16000 Hz, mono.
@@ -38,10 +58,14 @@ def synthesize_pcm(text: str, language: str = "en") -> bytes:
     if not text:
         return b""
 
-    # Pick the right voice model for the language
-    if language == "es" and settings.piper_model_es:
-        model_name = settings.piper_model_es
-    else:
+    model_name = _get_model_name(language)
+
+    # If no Piper model, try espeak-ng fallback
+    if not model_name:
+        if language in ESPEAK_VOICES:
+            return _synthesize_espeak(text, ESPEAK_VOICES[language])
+        # Unknown language — fall back to English Piper
+        log.warning("No TTS model for language, falling back to English", lang=language)
         model_name = settings.piper_model
 
     model_path = os.path.join(settings.piper_model_path, f"{model_name}.onnx")
@@ -106,3 +130,57 @@ def _fallback_silence(seconds: float) -> bytes:
     """Return silent PCM16 audio for the given duration."""
     num_samples = int(ASTERISK_SAMPLE_RATE * seconds)
     return b"\x00\x00" * num_samples
+
+
+def _synthesize_espeak(text: str, voice: str) -> bytes:
+    """
+    Synthesize text using espeak-ng (fallback for languages without a Piper model).
+    Outputs 16kHz mono PCM16 directly — no resampling needed.
+
+    Args:
+        text: Text to speak
+        voice: espeak-ng voice tag (e.g. 'he' for Hebrew)
+
+    Returns:
+        Raw PCM16 bytes at 16000 Hz, mono.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run(
+            [
+                "espeak-ng",
+                "-v", voice,
+                "-r", "160",        # words per minute (slightly slower for clarity)
+                "-a", "180",        # amplitude (0-200)
+                "--stdout",
+            ],
+            input=text.encode("utf-8"),
+            capture_output=True,
+            timeout=15,
+        )
+
+        if result.returncode != 0:
+            log.error("espeak-ng TTS error", voice=voice, stderr=result.stderr.decode())
+            return _fallback_silence(seconds=1)
+
+        # espeak-ng --stdout outputs a WAV file; extract the PCM data
+        raw_wav = result.stdout
+        if len(raw_wav) < 44:
+            return _fallback_silence(seconds=1)
+
+        # Strip 44-byte WAV header to get raw PCM
+        raw_pcm = raw_wav[44:]
+
+        # espeak-ng outputs at 22050 Hz by default; resample to 16000 Hz
+        resampled = _resample_pcm(raw_pcm, 22050, ASTERISK_SAMPLE_RATE)
+        log.info("espeak-ng TTS synthesized", voice=voice, chars=len(text), bytes=len(resampled))
+        return resampled
+
+    except FileNotFoundError:
+        log.error("espeak-ng not found. Install with: apt-get install espeak-ng")
+        return _fallback_silence(seconds=1)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)

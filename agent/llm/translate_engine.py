@@ -1,10 +1,12 @@
 """
 Translation engine using Ollama (fully local, no cloud).
 
-Detects language and translates between English and Spanish.
+Detects language and translates between English and 6 other languages
+(Spanish, French, Italian, German, Romanian, Hebrew).
+
 Used to:
-  1. Translate caller speech (ES → EN) before LLM intent detection
-  2. Translate AI responses (EN → ES) before Piper TTS speaks to caller
+  1. Translate caller speech to English before LLM intent detection
+  2. Translate AI responses back to the caller's language before TTS
   3. Provide translated transcripts to the dashboard for call takers
 """
 import re
@@ -15,10 +17,28 @@ from config import settings
 
 log = structlog.get_logger(__name__)
 
-# Supported language codes
+# Canonical language codes
 LANG_EN = "en"
 LANG_ES = "es"
-SUPPORTED_LANGS = {LANG_EN, LANG_ES}
+LANG_FR = "fr"
+LANG_IT = "it"
+LANG_DE = "de"
+LANG_RO = "ro"
+LANG_HE = "he"
+
+# Maps ISO 639-1 code → full language name used in translation prompts
+LANG_NAMES = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "de": "German",
+    "ro": "Romanian",
+    "he": "Hebrew",
+}
+
+# All languages supported for auto-detect and translation
+SUPPORTED_LANGS = set(LANG_NAMES.keys())
 
 TRANSLATE_PROMPT = """You are a professional translator. Translate the following text to {target_language}.
 Output ONLY the translated text — no explanations, no quotes, no labels.
@@ -27,7 +47,8 @@ If the text is already in {target_language}, output it unchanged.
 Text to translate:
 {text}"""
 
-DETECT_PROMPT = """Detect the language of the following text. Reply with only the ISO 639-1 code (e.g. "en" for English, "es" for Spanish).
+DETECT_PROMPT = """Detect the language of the following text. Reply with only the ISO 639-1 language code.
+Examples: "en" for English, "es" for Spanish, "fr" for French, "it" for Italian, "de" for German, "ro" for Romanian, "he" for Hebrew.
 Output ONLY the 2-letter code, nothing else.
 
 Text:
@@ -73,8 +94,7 @@ async def translate(text: str, target_lang: str, source_lang: str = "") -> str:
     if not text:
         return text
 
-    lang_names = {"en": "English", "es": "Spanish"}
-    target_name = lang_names.get(target_lang, target_lang)
+    target_name = LANG_NAMES.get(target_lang, target_lang)
 
     try:
         prompt = TRANSLATE_PROMPT.format(
