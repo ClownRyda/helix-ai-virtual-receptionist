@@ -1,0 +1,44 @@
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# ── Environment / secrets ─────────────────────────────────────
+.env
+.env.local
+agent/.env
+agent/credentials.json
+agent/token.json
+*.db
+
+# ── Node.js ───────────────────────────────────────────────────
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.next/
+dashboard/package-lock.json
+
+# ── Docker ────────────────────────────────────────────────────
+# Don't commit runtime data
+docker-volumes/
+
+# ── IDE / OS ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Whisper model cache ───────────────────────────────────────
+.cache/

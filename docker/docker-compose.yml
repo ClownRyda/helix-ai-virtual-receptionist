@@ -1,0 +1,122 @@
+# ============================================================
+# PBX Assistant — Docker Compose (Dev / Testing)
+# Host: Ubuntu server with a supported NVIDIA GPU
+# ============================================================
+#
+# All SIP/RTP-facing services use host networking to avoid
+# NAT headaches with Docker bridge networks. This is fine for
+# dev/testing — the final deployment will be native anyway.
+#
+# Ports used on the host:
+#   5060/udp    — SIP signaling (Asterisk)
+#   8088/tcp    — ARI HTTP + WebSocket (Asterisk)
+#   8000/tcp    — Agent REST API (Python)
+#   3000/tcp    — Dashboard (Node.js)
+#   10000-20000 — Asterisk RTP
+#   20000-20100 — Agent RTP (ExternalMedia)
+#   11434/tcp   — Ollama LLM API
+# ============================================================
+
+services:
+
+  # ── Asterisk PBX ────────────────────────────────────────────
+  asterisk:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.asterisk
+    container_name: pbx-asterisk
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      # Live-edit configs without rebuilding
+      - ../asterisk/etc/asterisk:/etc/asterisk:ro
+      # Persist voicemail, recordings, etc.
+      - asterisk-spool:/var/spool/asterisk
+      - asterisk-logs:/var/log/asterisk
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Python AI Agent ─────────────────────────────────────────
+  agent:
+    build:
+      context: ../agent
+      dockerfile: ../docker/Dockerfile.agent
+    container_name: pbx-agent
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ../agent/.env
+    environment:
+      # Override for Docker context — Asterisk is on localhost (host network)
+      - ASTERISK_HOST=127.0.0.1
+      - AGENT_RTP_HOST=127.0.0.1
+      - OLLAMA_HOST=http://127.0.0.1:11434
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+    volumes:
+      # Live-edit agent code without rebuilding
+      - ../agent:/app
+      # Persist SQLite database across restarts
+      - agent-data:/app/data
+      # Google Calendar credentials (mount from host)
+      - ../agent/credentials.json:/app/credentials.json:ro
+      - ../agent/token.json:/app/token.json
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      asterisk:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  # ── Ollama LLM Server ───────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pbx-ollama
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      # Reuse models already downloaded on the host
+      - ${OLLAMA_MODELS_DIR:-~/.ollama/models}:/root/.ollama/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Dashboard (React + Express) ─────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: pbx-dashboard
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - API_BASE_URL=${API_BASE_URL:-http://localhost:8000}
+    depends_on:
+      - agent
+
+volumes:
+  asterisk-spool:
+  asterisk-logs:
+  agent-data:

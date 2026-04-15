@@ -1,0 +1,22 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    asterisk \
+    asterisk-modules \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy configs
+COPY asterisk/etc/asterisk/ /etc/asterisk/
+
+# Fix permissions
+RUN chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk
+
+EXPOSE 5060/udp
+EXPOSE 5060/tcp
+EXPOSE 8088/tcp
+EXPOSE 10000-20000/udp
+
+USER asterisk
+CMD ["/usr/sbin/asterisk", "-f", "-vvv"]
