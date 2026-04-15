@@ -504,12 +504,51 @@ Windows Docker Desktop testing runs on CPU — slower but functional.
 
 ## Roadmap
 
-- [ ] Barge-in / interrupt AI mid-sentence
-- [ ] SMS callback confirmation via Twilio
-- [ ] SIP trunk integration (Twilio, VoIP.ms) for external inbound calls
-- [ ] Swap SQLite → PostgreSQL for production scale
-- [ ] Faster translation model (Helsinki-NLP opus-mt, ~100ms vs ~2s)
-- [ ] Additional languages (FR, DE, PT)
-- [ ] Wake-word detection to skip VAD on fast responses
-- [ ] Dashboard Holidays page (UI for `/api/holidays` CRUD)
-- [ ] Dashboard Voicemails page (playback + transcript view)
+### ✅ Shipped
+
+| Version | Feature |
+|---|---|
+| v1.0 | Asterisk PBX + ARI WebSocket integration |
+| v1.0 | Whisper STT + Silero VAD |
+| v1.0 | Ollama LLM (llama3.1:8b) intent detection + conversation |
+| v1.0 | Piper TTS — neural voice synthesis |
+| v1.0 | Google Calendar scheduling (OAuth2) |
+| v1.0 | SQLite call log + routing rules |
+| v1.0 | React dashboard (calls, routing, appointments) |
+| v1.0 | Docker (Linux GPU) + Docker Desktop (Windows CPU) |
+| v1.1 | Bilingual EN/ES — auto language detection + replay greeting |
+| v1.1 | Live translation relay during transfers (both parties hear own language) |
+| v1.1 | CHANGELOG baseline + v1.0/v1.1 tags |
+| v1.2 | Business hours gate + timezone-aware scheduling |
+| v1.2 | Holiday management (DB + `.env` override + dashboard CRUD) |
+| v1.2 | After-hours modes: callback / voicemail / schedule / emergency |
+| v1.2 | Retry logic — localized silence prompts, max-retry operator fallback |
+| v1.2 | DTMF keypress fallback menu |
+| v1.2 | VIP caller routing (bypass AI → direct to operator) |
+| v1.2 | Structured call-path logging (JSON stored per call) |
+| v1.2 | Optional voicemail recording + Whisper transcription |
+| v1.2 | Optional LLM post-call summary |
+| v1.2 | Optional FAQ / knowledge-base lookup |
+| v1.2 | Dashboard overhaul — 12+ panels (stats, routing, holidays, voicemails, config, health) |
+| v1.3 | Interactive onboarding wizard — `scripts/onboard.sh` (Linux/macOS) |
+| v1.3 | Interactive onboarding wizard — `scripts/onboard-windows.ps1` (Windows) |
+| v1.3 | Wizard writes `.env`, `ari.conf`, `pjsip.conf` automatically |
+| v1.4 | 7-language support: EN, ES, FR, IT, DE, RO, HE |
+| v1.4 | Piper TTS voices for FR / IT / DE / RO |
+| v1.4 | espeak-ng fallback for Hebrew (no Piper voice available) |
+| v1.4 | All prompts, greetings, after-hours messages, DTMF menus localized in 7 languages |
+
+---
+
+### 🔜 Planned
+
+- [ ] **Barge-in** — interrupt AI mid-sentence when caller starts speaking
+- [ ] **SIP trunk integration** — Twilio, VoIP.ms, or any ITSP for real inbound DID numbers
+- [ ] **SMS callback confirmation** — text the caller a confirmation after scheduling (Twilio)
+- [ ] **Faster translation** — swap Ollama translation path for Helsinki-NLP opus-mt (~100ms vs ~2s)
+- [ ] **Wake-word detection** — skip VAD warmup on fast responses
+- [ ] **PostgreSQL support** — drop-in swap from SQLite for production-scale deployments
+- [ ] **Dashboard Voicemails page** — in-browser playback + transcript view
+- [ ] **GitHub Releases** — formal release pages with changelogs for v1.2 / v1.3 / v1.4
+- [ ] **Additional languages** — Portuguese (PT), Polish (PL), Arabic (AR) when Piper voices become available
+- [ ] **Web-based onboarding** — browser UI equivalent of the onboarding wizard
