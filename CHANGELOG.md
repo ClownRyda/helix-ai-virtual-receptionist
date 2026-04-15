@@ -4,7 +4,40 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.4
+## [latest] → v1.4.1
+
+---
+
+## [v1.4.1] — 2026-04-15
+
+### Summary
+Documentation accuracy patch. No code changes. Fixes stale and misleading content in
+README.md that would trip up a fresh Ubuntu install: GPU incorrectly listed as required,
+native install steps were three bare lines with no dependencies, `deploy.sh` and
+`firewall.sh` were mentioned with no explanation of what they do, Piper TTS still listed
+as EN+ES only despite v1.4 adding 7 languages, and a dashboard section referenced a
+v1.2 tag that was long obsolete.
+
+### Changed (`README.md`)
+- **Hardware Requirements** — GPU is now correctly described as optional; CPU-only mode
+  is documented with expected latency (~3-5s STT vs sub-second on GPU); onboarding
+  wizard step 2 is noted as the way to choose
+- **Native install section** — expanded from 3 bare lines to a full 6-step guide
+  covering: system packages (`asterisk`, `python3.11`, `espeak-ng`, `ffmpeg`), Ollama
+  install + model pull, Piper binary setup, Asterisk config file placement, Python
+  virtualenv + `pip install`, and service startup
+- **Quick Start — Docker section** — `firewall.sh` now documents what ports it opens
+  (SIP 5060, RTP 10000-20100, ARI 8088, API 8000, Dashboard 3000); `deploy.sh` explains
+  what it does (builds images, starts 4 services, health-waits, prints URL summary)
+- **Built with table** — Piper TTS row updated from "EN + ES neural voices" to
+  "6-language neural voices (EN/ES/FR/IT/DE/RO) + espeak-ng for Hebrew"
+- **7-language section** — renamed from "Bilingual EN/ES support"; added bullet
+  documenting that all prompts, retry messages, DTMF menus, after-hours messages, and
+  operator-fallback strings are localized in all 7 languages; TTS voice matrix noted
+- **Project structure** — `piper_engine.py` comment updated from "EN + ES voices" to
+  "7-language dispatch + espeak-ng Hebrew fallback"
+- **Dashboard table** — Settings row removed stale "v1.2" annotation
+- **Version badge** — updated to v1.4.1
 
 ---
 

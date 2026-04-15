@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.4-cyan)
+![Version](https://img.shields.io/badge/version-v1.4.1-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -96,11 +96,13 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
 - Hard-override holiday list in `.env` (`HOLIDAY_DATES=2026-12-25,2027-01-01`)
 - Four after-hours modes: **callback**, **voicemail**, **schedule**, **emergency**
 
-### Bilingual EN / ES support
+### 7-language support
 - Greeting plays in English; Whisper detects language from caller's first response
 - If a non-English language is detected (ES, FR, IT, DE, RO, HE) → greeting replays in that language; full conversation continues in the caller's language
+- All prompts, retry messages, DTMF menus, after-hours messages, and operator fallback are localized in all 7 languages
 - Greeting tells caller "no buttons to press — just speak naturally"
 - All AI responses generated directly in the caller's detected language
+- TTS voices: Piper neural voices for EN/ES/FR/IT/DE/RO — espeak-ng for Hebrew (no Piper voice available)
 
 ### Live translation relay (during transfers)
 After a call is transferred to a live person, if the caller and the agent speak different languages, a **TranslationRelay** starts automatically — both parties just speak normally:
@@ -196,10 +198,14 @@ The wizard will:
 
 **Linux (Docker):**
 ```bash
-bash scripts/firewall.sh   # open ports (one-time)
-./deploy.sh --pull         # first run: build + pull LLM
-./deploy.sh                # subsequent runs
+# One-time: open required firewall ports (SIP 5060, RTP 10000-20100, ARI 8088, API 8000, Dashboard 3000)
+bash scripts/firewall.sh YOUR_LAN_SUBNET   # e.g. 192.168.1.0/24
+
+./deploy.sh --pull   # first run: builds containers + pulls Ollama model (takes a few minutes)
+./deploy.sh          # subsequent runs
 ```
+
+`deploy.sh` handles: building Docker images, starting all 4 services (Asterisk, Ollama, agent, dashboard), waiting for each to become healthy, and printing a summary of URLs and extensions when ready.
 
 **Windows (Docker Desktop):**
 ```powershell
@@ -207,11 +213,35 @@ bash scripts/firewall.sh   # open ports (one-time)
 .\deploy-windows.ps1         # subsequent runs
 ```
 
-**Linux (Native):**
+**Linux (Native — no Docker):**
 ```bash
+# 1. System dependencies
+sudo apt-get update
+sudo apt-get install -y asterisk python3.11 python3.11-venv python3-pip espeak-ng ffmpeg
+
+# 2. Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.1:8b
+
+# 3. Install Piper TTS
+# Download the piper binary from https://github.com/rhasspy/piper/releases
+# Extract to /usr/local/bin/piper and mkdir -p /opt/piper/models
+# Then run the onboarding wizard — it will download voice models for you
+bash scripts/onboard.sh
+
+# 4. Copy Asterisk config files
+sudo cp -r asterisk/etc/asterisk/* /etc/asterisk/
+sudo asterisk -rx "core reload"   # or: sudo systemctl restart asterisk
+
+# 5. Python virtualenv + dependencies
+cd agent
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 6. Start services
 sudo systemctl start asterisk
 ollama serve &
-cd agent && python main.py
+python main.py
 ```
 
 ### Step 3 — Register a softphone and dial 9999
@@ -401,7 +431,7 @@ Access at `http://YOUR_SERVER_IP:3000` (server) or `http://localhost:3000` (Dock
 | Call Detail | Full transcript + structured call-path events + LLM summary |
 | Routing | Keyword → extension rules with agent language (inline CRUD) |
 | Appointments | Scheduled callbacks with Google Calendar status |
-| Settings | Current agent configuration (v1.2: all new settings included) |
+| Settings | Current agent configuration — all feature flags, business hours, TTS, LLM settings |
 
 ---
 
@@ -422,7 +452,7 @@ helix-ai-virtual-receptionist/
 │   ├── stt/
 │   │   └── whisper_engine.py    faster-whisper STT, returns text + detected language
 │   ├── tts/
-│   │   └── piper_engine.py      Piper TTS, EN + ES voices
+│   │   └── piper_engine.py      Piper TTS, 7-language dispatch + espeak-ng Hebrew fallback
 │   ├── llm/
 │   │   ├── intent_engine.py     Ollama intent detection, FAQ loader, call summary
 │   │   └── translate_engine.py  EN ↔ ES translation via Ollama (local)
@@ -464,24 +494,27 @@ helix-ai-virtual-receptionist/
 
 ## Hardware Requirements
 
+**GPU is optional.** Helix AI runs on CPU-only hardware — Whisper is slower (~3-5s per utterance vs sub-second on GPU) but fully functional. The onboarding wizard asks which mode you want.
+
 | Component | Minimum | Recommended |
 |---|---|---|
-| GPU | Any CUDA GPU (4 GB+) | RTX 4090 |
+| GPU | None required (CPU mode works) | NVIDIA RTX 3080+ (CUDA) |
 | RAM | 8 GB | 16 GB+ |
 | OS | Ubuntu 22.04 | Ubuntu 22.04 |
 | Disk | 10 GB | 20 GB (models + voicemail recordings) |
 
-**Model VRAM footprint:**
+**Model VRAM footprint (GPU mode):**
 
 | Component | Model | VRAM |
 |---|---|---|
 | STT | faster-whisper base (multilingual) | ~150 MB |
 | LLM | llama3.1:8b | ~5 GB |
-| TTS | Piper (CPU, no GPU needed) | 0 |
+| TTS | Piper TTS (runs on CPU — no GPU needed) | 0 |
 | **Total** | | **~5.2 GB** |
 
-RTX 4090 (24 GB) handles everything with room to spare. Also works on a 3080 (10 GB).  
-Windows Docker Desktop testing runs on CPU — slower but functional.
+RTX 4090 (24 GB) handles everything with room to spare. RTX 3080 (10 GB) works fine.  
+CPU-only mode: set `WHISPER_DEVICE=cpu` in `.env` (or choose option 2 in the onboarding wizard). Expect 3-5 second STT latency instead of sub-second.  
+Windows Docker Desktop testing always runs on CPU — slower but functional for development.
 
 ---
 
@@ -494,7 +527,7 @@ Windows Docker Desktop testing runs on CPU — slower but functional.
 | Speech-to-text | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (multilingual, GPU) |
 | Voice activity | [Silero VAD](https://github.com/snakers4/silero-vad) |
 | LLM | [Ollama](https://ollama.com/) — `llama3.1:8b` (local, no cloud) |
-| Text-to-speech | [Piper TTS](https://github.com/rhasspy/piper) — EN + ES neural voices |
+| Text-to-speech | [Piper TTS](https://github.com/rhasspy/piper) — 6-language neural voices (EN/ES/FR/IT/DE/RO) + espeak-ng for Hebrew |
 | Scheduling | Google Calendar API (OAuth2) |
 | Database | SQLite + SQLAlchemy async |
 | API | FastAPI |
