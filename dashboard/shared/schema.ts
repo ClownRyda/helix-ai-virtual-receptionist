@@ -15,6 +15,7 @@ export interface CallLog {
   transcript?: string | null;
   appointment_id?: string | null;
   notes?: string | null;
+  summary?: string | null;
 }
 
 export interface CallStats {
@@ -22,6 +23,8 @@ export interface CallStats {
   transferred: number;
   scheduled: number;
   hangup: number;
+  after_hours: number;
+  voicemail: number;
   avg_duration_seconds: number;
 }
 
@@ -32,6 +35,7 @@ export interface RoutingRule {
   description: string | null;
   active: boolean;
   priority: number;
+  agent_lang: string;
 }
 
 export interface Appointment {
@@ -63,4 +67,36 @@ export interface AgentConfig {
   appointment_slot_minutes: number;
   availability_lookahead_days: number;
   google_calendar_id: string;
+  // v1.2
+  after_hours_mode: string;
+  operator_extension: string;
+  emergency_extension: string;
+  max_retries: number;
+  silence_timeout_sec: number;
+  dtmf_enabled: boolean;
+  dtmf_map: string;
+  vip_callers: string;
+  voicemail_enabled: boolean;
+  voicemail_transcribe: boolean;
+  call_summary_enabled: boolean;
+  faq_enabled: boolean;
+  faq_file: string;
+}
+
+export interface Holiday {
+  id: number;
+  date: string;
+  name: string;
+  active: boolean;
+}
+
+export interface HealthStatus {
+  status: string;
+  version: string;
+  features: {
+    voicemail: boolean;
+    call_summary: boolean;
+    faq: boolean;
+    dtmf: boolean;
+  };
 }

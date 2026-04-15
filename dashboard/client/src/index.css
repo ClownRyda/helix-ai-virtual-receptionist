@@ -136,10 +136,12 @@
 }
 
 /* Badge variants */
-.badge-scheduled { background: hsl(188 60% 25%); color: hsl(188 72% 65%); }
-.badge-transferred { background: hsl(260 40% 22%); color: hsl(260 60% 72%); }
-.badge-hangup { background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
-.badge-answered { background: hsl(142 40% 18%); color: hsl(142 60% 55%); }
+.badge-scheduled   { background: hsl(188 60% 25%);   color: hsl(188 72% 65%); }
+.badge-transferred { background: hsl(260 40% 22%);   color: hsl(260 60% 72%); }
+.badge-hangup      { background: hsl(var(--muted));   color: hsl(var(--muted-foreground)); }
+.badge-answered    { background: hsl(142 40% 18%);   color: hsl(142 60% 55%); }
+.badge-after-hours { background: hsl(38 60% 20%);    color: hsl(38 90% 60%); }
+.badge-voicemail   { background: hsl(340 40% 20%);   color: hsl(340 70% 65%); }
 
 /* Transcript block */
 .transcript-block {

@@ -1,12 +1,12 @@
 import { Link, useLocation } from "wouter";
-import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Radio } from "lucide-react";
+import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Radio, Voicemail } from "lucide-react";
 
 const nav = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/calls", label: "Call Logs", icon: Phone },
-  { href: "/routing", label: "Routing Rules", icon: GitMerge },
-  { href: "/appointments", label: "Appointments", icon: CalendarClock },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/",            label: "Dashboard",    icon: LayoutDashboard },
+  { href: "/calls",       label: "Call Logs",    icon: Phone },
+  { href: "/routing",     label: "Routing Rules",icon: GitMerge },
+  { href: "/appointments",label: "Appointments", icon: CalendarClock },
+  { href: "/settings",    label: "Settings",     icon: Settings },
 ];
 
 export default function Sidebar() {
@@ -17,20 +17,24 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 py-5 border-b border-border">
         <div className="flex items-center gap-2.5">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-label="PBX Assistant">
-            <rect width="28" height="28" rx="6" fill="hsl(188 72% 42% / 0.15)" />
-            <circle cx="14" cy="14" r="5" stroke="hsl(188 72% 42%)" strokeWidth="1.5" fill="none" />
-            <path d="M14 9V7M14 21v-2M9 14H7M21 14h-2" stroke="hsl(188 72% 42%)" strokeWidth="1.5" strokeLinecap="round" />
-            <circle cx="14" cy="14" r="2" fill="hsl(188 72% 42%)" />
+          {/* Helix waveform icon */}
+          <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-label="Helix AI">
+            <rect width="30" height="30" rx="7" fill="hsl(188 72% 42% / 0.15)" />
+            {/* Waveform bars */}
+            <rect x="6"  y="13" width="2.5" height="4"  rx="1.2" fill="hsl(188 72% 42% / 0.5)" />
+            <rect x="10" y="10" width="2.5" height="10" rx="1.2" fill="hsl(188 72% 42% / 0.75)" />
+            <rect x="14" y="7"  width="2.5" height="16" rx="1.2" fill="hsl(188 72% 42%)" />
+            <rect x="18" y="10" width="2.5" height="10" rx="1.2" fill="hsl(188 72% 42% / 0.75)" />
+            <rect x="22" y="13" width="2.5" height="4"  rx="1.2" fill="hsl(188 72% 42% / 0.5)" />
           </svg>
           <div>
-            <div className="text-sm font-semibold text-foreground leading-none">PBX Assistant</div>
-            <div className="text-xs text-muted-foreground mt-0.5">AI Receptionist</div>
+            <div className="text-sm font-semibold text-foreground leading-none">Helix AI</div>
+            <div className="text-xs text-muted-foreground mt-0.5">Virtual Receptionist</div>
           </div>
         </div>
       </div>
 
-      {/* Status */}
+      {/* Status pill */}
       <div className="px-5 py-3 border-b border-border">
         <div className="live-indicator">
           <span className="status-dot active" />
@@ -60,23 +64,21 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-border">
-        <div className="text-xs text-muted-foreground space-y-1">
-          <div className="flex items-center gap-1.5">
-            <Radio size={11} />
-            <span>Asterisk ARI</span>
-            <span className="status-dot online ml-auto" />
+      {/* Service health footer */}
+      <div className="px-5 py-4 border-t border-border space-y-2">
+        <div className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Services</div>
+        {[
+          { label: "Asterisk ARI", icon: Radio },
+          { label: "Ollama LLM",   icon: null },
+          { label: "Whisper STT",  icon: null },
+          { label: "Piper TTS",    icon: null },
+        ].map(({ label }) => (
+          <div key={label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="flex-1">{label}</span>
+            <span className="status-dot online" />
           </div>
-          <div className="flex items-center gap-1.5">
-            <span>Ollama LLM</span>
-            <span className="status-dot online ml-auto" />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span>Whisper STT</span>
-            <span className="status-dot online ml-auto" />
-          </div>
-        </div>
+        ))}
+        <div className="pt-2 text-xs text-muted-foreground/50 font-mono">v1.2</div>
       </div>
     </aside>
   );
