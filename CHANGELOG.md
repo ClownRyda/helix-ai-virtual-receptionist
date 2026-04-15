@@ -4,7 +4,50 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.2
+## [latest] → v1.3
+
+---
+
+## [v1.3] — 2026-04-15
+
+### Summary
+Interactive onboarding wizard for first-time setup. New users no longer need to manually
+edit any config files. Two scripts — `scripts/onboard.sh` (Linux/macOS) and
+`scripts/onboard-windows.ps1` (Windows PowerShell) — walk through every required setting
+in a guided, step-by-step interview, write all config files automatically, install
+dependencies, pull voice models, guide Google Calendar OAuth, and validate that services
+are reachable before handing off to `deploy.sh`.
+
+### Added
+- `scripts/onboard.sh` — interactive guided setup for Linux/macOS (Docker and native modes)
+  - 9-step wizard: deployment mode → business identity → passwords → network → extensions → after-hours → GPU/CPU → optional features → write & validate
+  - Writes `agent/.env` with all 50+ variables filled in
+  - Writes ARI password to `asterisk/etc/asterisk/ari.conf`
+  - Writes server IP, LAN subnet, and extension passwords to `asterisk/etc/asterisk/pjsip.conf` (and `pjsip.windows.conf` if present)
+  - Downloads Piper TTS binary (native mode) and EN + ES voice models from Hugging Face
+  - Pulls `llama3.1:8b` from Ollama (native mode) with progress display
+  - Installs Python dependencies via pip (native mode)
+  - Guides Google Calendar OAuth with option to run authorization inline
+  - Validates Asterisk ARI, Ollama, and Agent API reachability
+  - Prints full configuration summary and next-step checklist
+  - Re-runnable: safely overwrites existing config values without duplication
+- `scripts/onboard-windows.ps1` — PowerShell equivalent for Windows Docker Desktop users
+  - Same step-by-step prompting with Windows-native color output
+  - Reads/writes `.env` via PowerShell string replacement (no `sed` dependency)
+  - Prompts for secure passwords using `Read-Host -AsSecureString`
+  - Optionally launches `docker compose up` and runs Ollama model pull inline
+  - Health-checks all services before printing summary
+  - Includes Google Calendar credentials.json guidance
+
+### Changed
+- `README.md` — Quick Start completely rewritten: onboarding wizard is now Step 1 for all platforms
+- `README.md` — File structure updated to list onboarding scripts
+- `.github/CONTRIBUTING.md` — Development setup now leads with onboarding wizard; legacy manual steps retained as "after onboarding" section
+
+### Notes
+- All secrets (ARI password, extension passwords) use `read -rs` / `Read-Host -AsSecureString` — never echoed to terminal
+- Server IP entered during onboarding is written only to local config files, never logged or transmitted
+- Script is idempotent — safe to re-run to update any setting
 
 ---
 

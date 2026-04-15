@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.2-cyan)
+![Version](https://img.shields.io/badge/version-v1.3-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -161,60 +161,69 @@ All three degrade gracefully when disabled — no errors, no changed behavior.
 
 ## Quick Start
 
-### Option A — Windows (Docker Desktop, for testing)
+> **New install? Run the onboarding wizard first.** It prompts for every required value, writes all config files, and validates your setup — no manual editing needed.
 
+### Step 0 — Clone the repo
+
+```bash
+git clone https://github.com/ClownRyda/helix-ai-virtual-receptionist.git
+cd helix-ai-virtual-receptionist
+```
+
+### Step 1 — Run the onboarding wizard
+
+**Linux / macOS (Docker or native):**
+```bash
+bash scripts/onboard.sh
+```
+
+**Windows (Docker Desktop):**
 ```powershell
-git clone https://github.com/ClownRyda/helix-ai-virtual-receptionist.git
-cd helix-ai-virtual-receptionist
+# Allow running local scripts (one-time)
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
-# First run: build images + pull Ollama model
-.\deploy-windows.ps1 -Pull
-
-# Subsequent runs
-.\deploy-windows.ps1
-
-# Stop
-.\deploy-windows.ps1 -Down
-
-# Watch logs
-.\deploy-windows.ps1 -Logs
+.\scripts\onboard-windows.ps1
 ```
 
-### Option B — Ubuntu Server (Docker, for testing)
+The wizard will:
+- Prompt for business name, timezone, hours, passwords, IP, extensions
+- Write `agent/.env`, `ari.conf`, and `pjsip.conf` automatically
+- Optionally install Piper TTS voice models and pull the Ollama model
+- Guide you through Google Calendar OAuth
+- Validate that all services are reachable
 
+### Step 2 — Start (if not already running)
+
+**Linux (Docker):**
 ```bash
-git clone https://github.com/ClownRyda/helix-ai-virtual-receptionist.git
-cd helix-ai-virtual-receptionist
-
-# Open firewall ports (one-time)
-bash scripts/firewall.sh
-
-# First run: build + pull Ollama model
-./deploy.sh --pull
-
-# Subsequent runs
-./deploy.sh
+bash scripts/firewall.sh   # open ports (one-time)
+./deploy.sh --pull         # first run: build + pull LLM
+./deploy.sh                # subsequent runs
 ```
 
-### Option C — Ubuntu Server (Native / Production)
+**Windows (Docker Desktop):**
+```powershell
+.\deploy-windows.ps1 -Pull   # first run
+.\deploy-windows.ps1         # subsequent runs
+```
 
+**Linux (Native):**
 ```bash
-# 1. Install dependencies
-bash scripts/setup.sh
-
-# 2. Configure
-cp agent/.env.example agent/.env
-nano agent/.env   # set passwords, business name, timezone, hours
-
-# 3. Install Asterisk configs
-sudo cp -r asterisk/etc/asterisk/* /etc/asterisk/
-sudo asterisk -rx "core reload"
-
-# 4. Pull Ollama model
-ollama pull llama3.1:8b
-
-# 5. Start agent
+sudo systemctl start asterisk
+ollama serve &
 cd agent && python main.py
+```
+
+### Step 3 — Register a softphone and dial 9999
+
+See **[docs/zoiper-setup.md](docs/zoiper-setup.md)** for step-by-step Zoiper instructions.
+
+### Useful commands
+
+```bash
+./deploy.sh --logs   # tail all service logs
+./deploy.sh --down   # stop everything
+docker exec -it pbx-asterisk asterisk -rvvv   # Asterisk CLI
 ```
 
 ---
@@ -438,7 +447,9 @@ helix-ai-virtual-receptionist/
 ├── docs/
 │   └── zoiper-setup.md          Step-by-step Zoiper softphone guide
 ├── scripts/
-│   ├── setup.sh                 Native (non-Docker) install script
+│   ├── onboard.sh               Interactive first-time setup wizard (Linux/macOS)
+│   ├── onboard-windows.ps1      Interactive first-time setup wizard (Windows PowerShell)
+│   ├── setup.sh                 Legacy bare-metal install helper
 │   └── firewall.sh              UFW rules for Ubuntu server
 ├── deploy.sh                    One-shot Linux deploy script
 └── deploy-windows.ps1           One-shot Windows PowerShell deploy script

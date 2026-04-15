@@ -29,14 +29,27 @@ scripts/            Install and firewall scripts
 
 ## Development setup
 
-### Native (recommended for agent development)
+### First-time setup (all platforms)
+
+Run the interactive onboarding wizard. It writes all config files for you:
+
+```bash
+# Linux / macOS
+bash scripts/onboard.sh
+
+# Windows (PowerShell)
+.\scripts\onboard-windows.ps1
+```
+
+The wizard covers: business identity, passwords, server IP, extensions, after-hours mode, GPU/CPU selection, optional features, Google Calendar OAuth, and service validation.
+
+### After onboarding — Native (recommended for agent development)
 
 ```bash
 # Python agent
 cd agent
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then edit
 python main.py
 
 # Dashboard
@@ -45,11 +58,12 @@ npm install
 npm run dev
 ```
 
-### Docker (for integration testing)
+### After onboarding — Docker (for integration testing)
 
 ```bash
-./deploy.sh --pull        # Linux
-.\deploy-windows.ps1 -Pull  # Windows
+./deploy.sh --pull        # Linux (first run)
+./deploy.sh               # Linux (subsequent)
+.\deploy-windows.ps1 -Pull  # Windows (first run)
 ```
 
 ---
