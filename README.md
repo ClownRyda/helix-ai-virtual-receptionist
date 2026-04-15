@@ -1,54 +1,18 @@
 # Helix AI Virtual Receptionist
 
-A fully local, self-hosted AI phone receptionist for Asterisk-based phone systems. It answers inbound calls, speaks with callers in English or Spanish, figures out what they need, schedules callbacks with Google Calendar, and transfers calls to the right extension when a human should take over.
+![Version](https://img.shields.io/badge/version-v1.1-cyan) ![License](https://img.shields.io/badge/license-MIT-green)
 
-This project is for people who want an on-prem phone assistant that runs on their own hardware instead of sending call audio to cloud speech or voice APIs.
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
-**Server:** Ubuntu 22.04 + NVIDIA GPU on your LAN  
+A fully local, self-hosted AI phone receptionist. Answers calls, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, and speaks English and Spanish — all without any cloud APIs.
+
+**Server:** Ubuntu 22.04 + RTX 4090 at 192.168.4.31  
 **Testing:** Docker Desktop on Windows or native install on Ubuntu  
 **No subscriptions. No cloud. Everything runs on your hardware.**
 
 ---
 
-## What This Project Is
-
-Helix sits between your SIP callers and your team:
-
-- A caller dials your PBX.
-- Asterisk answers and hands the call to the Python agent.
-- The agent listens to the caller, detects language and intent, and decides what to do next.
-- It can answer basic questions, offer a callback time, or transfer the call to a configured extension.
-- If the caller and employee speak different languages, it can relay the conversation between English and Spanish after the transfer.
-
-In practice, this is a working foundation for a small-business receptionist, call router, and bilingual call assistant that stays inside your own PBX environment.
-
-## Core Capabilities
-
-- Answers inbound SIP calls through Asterisk and ARI
-- Speaks English and Spanish with automatic caller language detection
-- Handles receptionist-style conversations instead of button-based IVR menus
-- Routes calls by intent such as sales, support, or operator
-- Books callbacks against Google Calendar availability
-- Transfers to live staff extensions
-- Runs an English/Spanish translation relay after transfer when caller and staff language differ
-- Stores call logs, appointments, and routing rules locally
-- Exposes a dashboard for reviewing calls and editing routing behavior
-
-## Best Fit
-
-Helix is a good fit if you want:
-
-- A front desk or receptionist workflow for a small business
-- Natural-language call handling instead of menu trees
-- English/Spanish call intake and bilingual handoff
-- Local control over call audio and models
-- A starting point you can customize for your own routing rules and business logic
-
-Helix is not positioned here as a finished hosted phone platform, a turnkey enterprise contact center, or a drop-in replacement for a commercial SIP carrier stack.
-
----
-
-## What Happens On A Call
+## What It Does
 
 ```
 Caller dials in
@@ -75,7 +39,7 @@ books appointment  (sales/support)    in caller's lang
 
 ---
 
-## System Architecture
+## Architecture
 
 ```
 Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
@@ -128,13 +92,11 @@ Agent (EN) ──speaks──▶ agent_snoop channel
 
 Two isolated snoop channels (one per participant) prevent audio mixing. Each has its own VAD and translation loop running concurrently.
 
-> **Latency note:** Each translation pass takes ~2–4 seconds on a modern NVIDIA GPU (Whisper + Ollama + Piper). That means live bilingual calls feel more like using a human interpreter than a zero-latency phone call.
+> **Latency note:** Each translation pass takes ~2–4 seconds on the 4090 (Whisper + Ollama + Piper). Both parties experience a slight delay — similar to a phone interpreter. Acceptable for most use cases; upgrade path is a dedicated translation model (Helsinki-NLP opus-mt) for ~100ms latency.
 
 ---
 
 ## Quick Start
-
-If you just want to see the system working, start with Docker first. If you want to run it as a real always-on service on your own server, use the native Ubuntu path.
 
 ### Option A — Windows (Docker Desktop, for testing)
 
@@ -191,8 +153,6 @@ ollama pull llama3.1:8b
 # 5. Start agent
 cd agent && python main.py
 ```
-
-After the stack is up, register a softphone extension and dial `9999` to talk to the receptionist.
 
 ---
 
@@ -294,8 +254,6 @@ copy agent\.env.example agent\.env  # Windows
 
 ## Google Calendar Setup
 
-Google Calendar is optional. If you skip it, the receptionist can still answer calls, detect intent, and transfer calls, but it will not be able to book callback times.
-
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Create a project → Enable the **Google Calendar API**
 3. Create **OAuth 2.0 credentials** → Desktop app type
@@ -313,20 +271,18 @@ Quick reference:
 
 | Field | Value |
 |---|---|
-| SIP Server | `YOUR_SERVER_IP` (or your Windows IP for Docker Desktop) |
+| SIP Server | `192.168.4.31` (or your Windows IP for Docker Desktop) |
 | Port | `5060 / UDP` |
-| Extension 1 | `1001` / password set in `pjsip.conf` |
-| Extension 2 | `1002` / password set in `pjsip.conf` |
-| Extension 3 | `1003` / password set in `pjsip.conf` |
+| Extension 1 | `1001` / password `test1001` |
+| Extension 2 | `1002` / password `test1002` |
+| Extension 3 | `1003` / password `test1003` |
 | AI Receptionist | Dial **`9999`** |
-
-The softphone setup exists mainly so you can test the receptionist end-to-end on your LAN before connecting it to a wider phone environment.
 
 ---
 
 ## Extension Routing
 
-The receptionist decides where to send a caller based on what they say. Default routing is editable live from the dashboard:
+Default routing (editable live via the dashboard Routing page):
 
 | Keyword caller says | Routes to | Extension | Agent Language |
 |---|---|---|---|
@@ -336,14 +292,14 @@ The receptionist decides where to send a caller based on what they say. Default 
 
 ### Agent Language per Extension
 
-Each routing rule also stores the language spoken by the person at that extension (`agent_lang`). When a call is transferred, the system compares the caller's detected language to the employee's language:
+Each routing rule stores the language spoken by the person at that extension (`agent_lang`). When a call is transferred, the system automatically compares the caller's detected language against the agent's language:
 
 ```
 caller_lang == agent_lang  →  plain transfer (no relay, no overhead)
 caller_lang != agent_lang  →  TranslationRelay starts automatically
 ```
 
-To mark an extension as Spanish-speaking, edit the routing rule in the dashboard and set **Agent Language** to `es`. No code changes are needed.
+To mark an extension as Spanish-speaking, edit the routing rule in the dashboard and set **Agent Language** to `es`. No code changes needed — the relay activates or skips based purely on this value at call time.
 
 **Example:** Hire a Spanish-speaking support agent on ext 1004:
 1. Add routing rule: keyword `soporte` → extension `1004` → agent_lang `es`
@@ -411,7 +367,7 @@ helix-ai-virtual-receptionist/
 
 | Component | Minimum | Recommended |
 |---|---|---|
-| GPU | Any CUDA GPU (4GB+) | Modern NVIDIA GPU |
+| GPU | Any CUDA GPU (4GB+) | RTX 4090 (this project) |
 | RAM | 8 GB | 16 GB+ |
 | OS | Ubuntu 22.04 | Ubuntu 22.04 |
 | Disk | 10 GB | 20 GB (models + recordings) |
@@ -425,7 +381,7 @@ helix-ai-virtual-receptionist/
 | TTS | Piper (CPU, no GPU needed) | 0 |
 | **Total** | | **~5.2 GB** |
 
-A 24 GB NVIDIA GPU handles all of this with room to spare. A 10 GB card is also workable for this stack.
+The RTX 4090 (24 GB) handles all of this with room to spare. Works on a 3080 (10 GB) too.
 
 For Windows Docker Desktop testing, everything runs on CPU — slower but functional.
 
@@ -433,9 +389,7 @@ For Windows Docker Desktop testing, everything runs on CPU — slower but functi
 
 ## Dashboard
 
-Access the dashboard at `http://YOUR_SERVER_IP:3000` (server) or `http://localhost:3000` (Docker Desktop).
-
-The dashboard is the operator view for the system. It lets you review what happened on calls and adjust routing without editing code.
+Access at `http://192.168.4.31:3000` (server) or `http://localhost:3000` (Docker Desktop).
 
 | Page | What it shows |
 |---|---|
