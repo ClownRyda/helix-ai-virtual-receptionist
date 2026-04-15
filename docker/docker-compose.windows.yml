@@ -10,7 +10,7 @@
 #     firewall rules manageable during testing
 #
 # Your Windows host IP on LAN: find it with `ipconfig`
-# (e.g. 192.168.4.x — set WINDOWS_HOST_IP in .env.windows)
+# (e.g. your LAN IP shown by ipconfig — set WINDOWS_HOST_IP in .env.windows)
 # ============================================================
 
 services:

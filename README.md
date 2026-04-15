@@ -1,12 +1,12 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.1-cyan) ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-v1.2-cyan) ![License](https://img.shields.io/badge/license-MIT-green)
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
-A fully local, self-hosted AI phone receptionist. Answers calls, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, and speaks English and Spanish — all without any cloud APIs.
+A fully local, self-hosted AI phone receptionist. Answers calls, respects your business hours, handles after-hours callers gracefully, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, speaks English and Spanish — all without any cloud APIs.
 
-**Server:** Ubuntu 22.04 + RTX 4090 at 192.168.4.31  
+**Server:** Ubuntu 22.04 + RTX 4090 GPU  
 **Testing:** Docker Desktop on Windows or native install on Ubuntu  
 **No subscriptions. No cloud. Everything runs on your hardware.**
 
@@ -17,24 +17,39 @@ A fully local, self-hosted AI phone receptionist. Answers calls, detects intent,
 ```
 Caller dials in
       ↓
-Asterisk PBX answers
+VIP caller? → direct to operator (no AI)
       ↓
-AI greets caller in English + Spanish
+Business hours / holiday check
+  ├── Open → normal AI greeting
+  └── Closed → after-hours message
+           ├── callback  → speak hours, say goodbye
+           ├── voicemail → record + transcribe message
+           ├── schedule  → book callback via Calendar
+           └── emergency → transfer to emergency ext
       ↓
-Whisper detects caller language (EN or ES)
+AI greets caller in English
+      ↓
+Whisper detects language (EN or ES)
+If Spanish → replay greeting in Spanish
+      ↓
+DTMF menu announced (if enabled) — press 1/2/0 or just speak
       ↓
 Llama 3.1 determines intent
       ↓
-   ┌──────────────────┬──────────────────────┐
-   ▼                  ▼                      ▼
-Schedule          Transfer              Answer info
-   │                  │                      │
-Google Calendar   Routes to ext       Piper TTS reply
-books appointment  (sales/support)    in caller's lang
-                       │
-              If caller speaks ES:
-              TranslationRelay starts
-              (both parties hear own language)
+   ┌──────────────┬──────────────────────┐
+   ▼              ▼                      ▼
+Schedule      Transfer              Answer info
+   │              │                      │
+Calendar      Route to ext         Piper TTS reply
+books slot    (DB rules)           in caller's lang
+                   │
+          caller_lang ≠ agent_lang?
+          TranslationRelay starts
+          (both parties hear own language)
+      ↓
+On silence or confusion → retry prompts → operator fallback
+Structured call-path log written to database
+Optional: LLM call summary saved
 ```
 
 ---
@@ -48,51 +63,94 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
                          │
                          ▼
                Python Agent (FastAPI :8000)
-               ├── SileroVAD          voice activity detection
-               ├── faster-whisper     speech → text (GPU)
-               ├── Ollama llama3.1:8b intent + conversation
-               ├── translate_engine   EN ↔ ES via Ollama (local)
-               ├── Piper TTS          text → speech (EN + ES voices)
-               ├── Google Calendar    scheduling
-               └── SQLite             call logs + routing rules
+               ├── Business hours / holiday gate
+               ├── VIP caller bypass
+               ├── SileroVAD              voice activity detection
+               ├── faster-whisper         speech → text (GPU)
+               ├── Ollama llama3.1:8b     intent + conversation + FAQ
+               ├── translate_engine       EN ↔ ES via Ollama (local)
+               ├── Piper TTS              text → speech (EN + ES voices)
+               ├── Google Calendar        scheduling
+               ├── SQLite                 call logs + routing rules + holidays + voicemail
+               └── CallPath logger        structured per-call event log
                          │
                     REST API
                          │
                React Dashboard (:3000)
-               call logs · routing rules · appointments · settings
+               call logs · routing · appointments · holidays · settings
 ```
 
 ---
 
-## Bilingual Support (EN / ES)
+## Capabilities
 
-The system handles English and Spanish callers transparently:
+### Business hours & holiday management
+- Timezone-aware business hours check (configurable start/end hour)
+- Weekend detection (automatically closed Sat/Sun)
+- Holiday table in the database — add/remove via dashboard or API (`GET/POST/DELETE /api/holidays`)
+- Hard-override holiday list in `.env` (`HOLIDAY_DATES=2026-12-25,2027-01-01`)
+- Four after-hours modes: **callback**, **voicemail**, **schedule**, **emergency**
 
-### AI Attendant phase
-- Greeting plays in **both English and Spanish** so the caller hears their language immediately
-- Whisper auto-detects language on every turn using the multilingual `base` model
-- Caller language is locked in after 2 consistent turns
-- LLM responses are generated directly in the caller's language
-- Piper uses `en_US-lessac-medium` for English, `es_MX-claude-high` for Spanish
+### Bilingual EN / ES support
+- Greeting plays in English; Whisper detects language from caller's first response
+- If Spanish detected → greeting replays in Spanish; full conversation continues in Spanish
+- Greeting tells caller "no buttons to press — just speak naturally"
+- All AI responses generated directly in the caller's detected language
 
-### After transfer to a live person
-The **TranslationRelay** kicks in — both parties just speak normally:
+### Live translation relay (during transfers)
+After a call is transferred to a live person, if the caller and the agent speak different languages, a **TranslationRelay** starts automatically — both parties just speak normally:
 
 ```
 Caller (ES) ──speaks──▶ caller_snoop channel
-                              │ Whisper (ES) → translate ES→EN → Piper EN
+                              │ Whisper ES → translate ES→EN → Piper EN
                               ▼
                       Agent hears English
 
 Agent (EN) ──speaks──▶ agent_snoop channel
-                              │ Whisper (EN) → translate EN→ES → Piper ES
+                              │ Whisper EN → translate EN→ES → Piper ES
                               ▼
                       Caller hears Spanish
 ```
 
-Two isolated snoop channels (one per participant) prevent audio mixing. Each has its own VAD and translation loop running concurrently.
+Two isolated snoop channels prevent audio mixing. Relay only starts when `caller_lang ≠ agent_lang` — same-language transfers have zero overhead.
 
-> **Latency note:** Each translation pass takes ~2–4 seconds on the 4090 (Whisper + Ollama + Piper). Both parties experience a slight delay — similar to a phone interpreter. Acceptable for most use cases; upgrade path is a dedicated translation model (Helsinki-NLP opus-mt) for ~100ms latency.
+### Retry / fallback logic
+- Silence → bilingual retry prompt ("I didn't catch that — could you repeat?")
+- After `MAX_RETRIES` consecutive silences → graceful transfer to operator
+- After 2 consecutive unknown/unclear intents → graceful transfer to operator
+- No dead air — the caller always hears a spoken handoff
+
+### DTMF fallback menu (optional)
+- Off by default (`DTMF_ENABLED=false`)
+- When on, the greeting adds "or press 1 for sales, 2 for support, 0 for operator"
+- Callers can always speak naturally — keypress is a secondary escape hatch
+- Digits delivered via ARI WebSocket into a per-call queue; `[dtmf-menu]` dialplan context is a safety net
+
+### VIP / known-caller routing
+- Set `VIP_CALLERS=+15125550100,+19725550199`
+- Those numbers bypass the AI entirely → direct to `OPERATOR_EXTENSION` with a personalized welcome
+- Checked before the business-hours gate so VIPs always get through
+
+### Structured call-path logging
+Every call records a timestamped JSON event log covering every state transition:
+`call_start → media_ready → vip_check → greeted → language_detected → utterance → intent → transfer/schedule → teardown`
+Stored in `CallLog.notes`, returned by `GET /api/calls/{id}`.
+
+### Scheduling
+Google Calendar free/busy lookup, slot generation, and event booking — all in natural conversation, no keypress menus.
+
+### Extension routing
+Rules stored in SQLite, editable live via the dashboard. Each rule stores the language of the agent at that extension — relay activates automatically on mismatch.
+
+### Optional feature flags (all off by default)
+
+| Flag | What it does |
+|---|---|
+| `VOICEMAIL_ENABLED` | Records after-hours messages as WAV; optional Whisper transcription; stored in DB |
+| `CALL_SUMMARY_ENABLED` | LLM writes a 2-3 sentence post-call summary into `CallLog.summary` |
+| `FAQ_ENABLED` | Keyword-matches caller utterances against `FAQ_FILE` (plain text); matching lines injected into LLM context |
+
+All three degrade gracefully when disabled — no errors, no changed behavior.
 
 ---
 
@@ -104,7 +162,7 @@ Two isolated snoop channels (one per participant) prevent audio mixing. Each has
 git clone https://github.com/ClownRyda/helix-ai-virtual-receptionist.git
 cd helix-ai-virtual-receptionist
 
-# First run: builds images + pulls Ollama model
+# First run: build images + pull Ollama model
 .\deploy-windows.ps1 -Pull
 
 # Subsequent runs
@@ -126,7 +184,7 @@ cd helix-ai-virtual-receptionist
 # Open firewall ports (one-time)
 bash scripts/firewall.sh
 
-# First run: builds images + pulls Ollama model
+# First run: build + pull Ollama model
 ./deploy.sh --pull
 
 # Subsequent runs
@@ -141,7 +199,7 @@ bash scripts/setup.sh
 
 # 2. Configure
 cp agent/.env.example agent/.env
-nano agent/.env   # set passwords, business name, timezone
+nano agent/.env   # set passwords, business name, timezone, hours
 
 # 3. Install Asterisk configs
 sudo cp -r asterisk/etc/asterisk/* /etc/asterisk/
@@ -161,8 +219,7 @@ cd agent && python main.py
 ### Step 1 — Copy and edit `.env`
 
 ```bash
-cp agent/.env.example agent/.env   # Linux/Mac
-copy agent\.env.example agent\.env  # Windows
+cp agent/.env.example agent/.env
 ```
 
 ### Step 2 — Required changes
@@ -170,9 +227,11 @@ copy agent\.env.example agent\.env  # Windows
 | Variable | What to set |
 |---|---|
 | `ASTERISK_ARI_PASSWORD` | Must match `password` in `asterisk/etc/asterisk/ari.conf` |
-| `BUSINESS_NAME` | Your business name (spoken in greetings) |
+| `BUSINESS_NAME` | Your business name (spoken in every greeting) |
 | `AGENT_NAME` | Receptionist name (default: Alex) |
 | `BUSINESS_TIMEZONE` | e.g. `America/Chicago`, `America/New_York` |
+| `BUSINESS_HOURS_START` | Opening hour in 24h format (default: 9) |
+| `BUSINESS_HOURS_END` | Closing hour in 24h format (default: 17) |
 
 ### Full configuration reference
 
@@ -181,81 +240,115 @@ copy agent\.env.example agent\.env  # Windows
 |---|---|---|
 | `ASTERISK_HOST` | `localhost` | Asterisk IP (`asterisk` in Docker) |
 | `ASTERISK_ARI_PORT` | `8088` | ARI HTTP port |
-| `ASTERISK_ARI_USER` | `pbx-agent` | ARI username (set in ari.conf) |
-| `ASTERISK_ARI_PASSWORD` | `CHANGE_ME_ARI_PASSWORD` | **Change this** — must match ari.conf |
-| `ASTERISK_APP_NAME` | `pbx-agent` | Stasis app name |
+| `ASTERISK_ARI_USER` | `pbx-agent` | ARI username |
+| `ASTERISK_ARI_PASSWORD` | `CHANGE_ME` | **Change this** — must match ari.conf |
 
 #### RTP
 | Variable | Default | Description |
 |---|---|---|
-| `AGENT_RTP_HOST` | `127.0.0.1` | Bind address for agent RTP sockets (`0.0.0.0` in Docker) |
+| `AGENT_RTP_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` in Docker) |
 | `AGENT_RTP_PORT_START` | `20000` | Start of agent RTP port pool |
 | `AGENT_RTP_PORT_END` | `20100` | End of agent RTP port pool |
 | `AGENT_RTP_ADVERTISE_HOST` | _(empty)_ | Advertise address for Asterisk (set to `agent` in Docker bridge) |
 
-#### Voice Activity Detection
+#### Voice / STT / TTS / LLM
 | Variable | Default | Description |
 |---|---|---|
-| `VAD_THRESHOLD` | `0.5` | Speech probability threshold (0–1). Raise to 0.7 in noisy environments |
-| `VAD_MIN_SILENCE_MS` | `600` | ms of silence before end-of-utterance |
-| `VAD_SPEECH_PAD_MS` | `100` | ms padding added to speech start/end |
-
-#### Speech-to-Text (Whisper)
-| Variable | Default | Description |
-|---|---|---|
-| `WHISPER_MODEL` | `base.en` | Model for English-only mode |
-| `WHISPER_MODEL_MULTILINGUAL` | `base` | Model used when `AUTO_DETECT_LANGUAGE=true` — **must not be a `.en` model** |
-| `WHISPER_DEVICE` | `cuda` | `cuda` (GPU) or `cpu` |
-| `WHISPER_COMPUTE_TYPE` | `float16` | `float16` (GPU) or `int8` (CPU) |
-
-#### LLM (Ollama)
-| Variable | Default | Description |
-|---|---|---|
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API URL (`http://ollama:11434` in Docker) |
-| `OLLAMA_MODEL` | `llama3.1:8b` | Model for intent, conversation, and translation |
-
-#### Text-to-Speech (Piper)
-| Variable | Default | Description |
-|---|---|---|
-| `PIPER_MODEL` | `en_US-lessac-medium` | English voice |
-| `PIPER_MODEL_ES` | `es_MX-claude-high` | Spanish voice |
-| `PIPER_MODEL_PATH` | `/opt/piper/models` | Path to downloaded voice models |
-
-#### Bilingual
-| Variable | Default | Description |
-|---|---|---|
-| `SUPPORTED_LANGUAGES` | `en,es` | Comma-separated language codes |
+| `WHISPER_MODEL` | `base.en` | English-only model |
+| `WHISPER_MODEL_MULTILINGUAL` | `base` | Multilingual model — must not be a `.en` variant |
+| `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu` |
+| `OLLAMA_MODEL` | `llama3.1:8b` | Model for intent, conversation, translation |
+| `PIPER_MODEL` | `en_US-lessac-medium` | English TTS voice |
+| `PIPER_MODEL_ES` | `es_MX-claude-high` | Spanish TTS voice |
 | `AUTO_DETECT_LANGUAGE` | `true` | Auto-detect caller language via Whisper |
+
+#### Business hours & after-hours
+| Variable | Default | Description |
+|---|---|---|
+| `BUSINESS_HOURS_START` | `9` | Opening hour (24h) |
+| `BUSINESS_HOURS_END` | `17` | Closing hour (24h) |
+| `BUSINESS_TIMEZONE` | `America/Chicago` | tz database string |
+| `HOLIDAY_DATES` | _(empty)_ | Comma-separated ISO dates: `2026-12-25,2027-01-01` |
+| `AFTER_HOURS_MODE` | `callback` | `callback` \| `voicemail` \| `schedule` \| `emergency` |
+| `OPERATOR_EXTENSION` | `1001` | Operator extension for fallbacks |
+| `EMERGENCY_EXTENSION` | `1001` | Extension for `after_hours_mode=emergency` |
+
+#### Retry / DTMF / VIP
+| Variable | Default | Description |
+|---|---|---|
+| `MAX_RETRIES` | `3` | Consecutive silence events before operator transfer |
+| `SILENCE_TIMEOUT_SEC` | `8` | Seconds of no audio before counting as silence |
+| `DTMF_ENABLED` | `false` | Announce keypress menu in greeting |
+| `DTMF_MAP` | `{"1":"1002","2":"1003","0":"1001"}` | Digit → extension mapping |
+| `VIP_CALLERS` | _(empty)_ | Comma-separated caller IDs → bypass AI, direct to operator |
 
 #### Google Calendar
 | Variable | Default | Description |
 |---|---|---|
-| `GOOGLE_CREDENTIALS_FILE` | `credentials.json` | OAuth2 client credentials (download from Google Cloud Console) |
-| `GOOGLE_TOKEN_FILE` | `token.json` | OAuth2 token (auto-created on first auth) |
-| `GOOGLE_CALENDAR_ID` | `primary` | Calendar to use for appointments |
-| `APPOINTMENT_SLOT_MINUTES` | `30` | Duration of each appointment slot |
-| `AVAILABILITY_LOOKAHEAD_DAYS` | `7` | How many days ahead to offer slots |
+| `GOOGLE_CREDENTIALS_FILE` | `credentials.json` | OAuth2 client credentials |
+| `GOOGLE_TOKEN_FILE` | `token.json` | Auto-created on first auth |
+| `GOOGLE_CALENDAR_ID` | `primary` | Calendar for appointments |
+| `APPOINTMENT_SLOT_MINUTES` | `30` | Duration of each slot |
+| `AVAILABILITY_LOOKAHEAD_DAYS` | `7` | Days ahead to offer slots |
 
-#### Business
+#### Optional feature flags
 | Variable | Default | Description |
 |---|---|---|
-| `AGENT_NAME` | `Alex` | Receptionist name spoken in greetings |
-| `BUSINESS_NAME` | `My Business` | Business name spoken in greetings |
-| `BUSINESS_HOURS_START` | `9` | Opening hour (24h) |
-| `BUSINESS_HOURS_END` | `17` | Closing hour (24h) |
-| `BUSINESS_TIMEZONE` | `America/Chicago` | Timezone for scheduling |
+| `VOICEMAIL_ENABLED` | `false` | Record and transcribe after-hours messages |
+| `VOICEMAIL_DIR` | `/var/spool/helix/voicemail` | Where WAV files are saved |
+| `VOICEMAIL_TRANSCRIBE` | `true` | Transcribe with Whisper after recording |
+| `CALL_SUMMARY_ENABLED` | `false` | LLM generates post-call summary |
+| `FAQ_ENABLED` | `false` | Inject FAQ entries into LLM context |
+| `FAQ_FILE` | `faq.txt` | Path to plain-text FAQ file (one entry per line) |
 
-#### Routing
-| Variable | Default | Description |
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
 |---|---|---|
-| `ROUTING_RULES` | `{"sales":"1002",...}` | JSON keyword→extension map (also editable in dashboard) |
+| `GET` | `/api/calls` | List call logs |
+| `GET` | `/api/calls/{id}` | Call detail + transcript + call-path JSON + summary |
+| `GET` | `/api/stats` | Aggregate call stats |
+| `GET` | `/api/rules` | List routing rules |
+| `POST` | `/api/rules` | Create/update routing rule |
+| `PUT` | `/api/rules/{id}` | Update routing rule |
+| `DELETE` | `/api/rules/{id}` | Delete routing rule |
+| `GET` | `/api/appointments` | List scheduled callbacks |
+| `GET` | `/api/calendar/slots` | Available calendar slots |
+| `GET` | `/api/holidays` | List holidays |
+| `POST` | `/api/holidays` | Add a holiday |
+| `DELETE` | `/api/holidays/{id}` | Remove a holiday |
+| `GET` | `/api/config` | Current configuration |
+| `PATCH` | `/api/config` | Write selected settings to `.env` |
+| `GET` | `/api/voicemails` | List voicemail messages |
+| `GET` | `/api/voicemails/{id}` | Voicemail detail + transcript |
+| `PATCH` | `/api/voicemails/{id}` | Update voicemail status (unread/read/archived) |
+| `GET` | `/api/health` | Health check + version + feature flags |
+
+---
+
+## Extension Routing
+
+Default routing (editable live via the dashboard Routing page):
+
+| Keyword | Routes to | Extension | Agent Language |
+|---|---|---|---|
+| sales, pricing, billing | Sales | 1002 | `en` |
+| support, technical, help | Support | 1003 | `en` |
+| operator, person, anyone | Operator | 1001 | `en` |
+
+To add a Spanish-speaking agent at ext 1004:
+1. Add rule: keyword `soporte` → extension `1004` → agent_lang `es`
+2. Spanish caller → routes to 1004 → same language → no relay
+3. English caller → routes to 1004 → different language → relay starts automatically
 
 ---
 
 ## Google Calendar Setup
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a project → Enable the **Google Calendar API**
+2. Create a project → Enable **Google Calendar API**
 3. Create **OAuth 2.0 credentials** → Desktop app type
 4. Download `credentials.json` → place in `agent/`
 5. First run opens a browser for OAuth consent → creates `token.json`
@@ -265,13 +358,11 @@ copy agent\.env.example agent\.env  # Windows
 
 ## Softphone Setup (Zoiper)
 
-See **[docs/zoiper-setup.md](docs/zoiper-setup.md)** for full step-by-step instructions.
-
-Quick reference:
+See **[docs/zoiper-setup.md](docs/zoiper-setup.md)** for full instructions.
 
 | Field | Value |
 |---|---|
-| SIP Server | `192.168.4.31` (or your Windows IP for Docker Desktop) |
+| SIP Server | `YOUR_SERVER_IP` (or your Windows IP for Docker Desktop) |
 | Port | `5060 / UDP` |
 | Extension 1 | `1001` / password `test1001` |
 | Extension 2 | `1002` / password `test1002` |
@@ -280,31 +371,18 @@ Quick reference:
 
 ---
 
-## Extension Routing
+## Dashboard
 
-Default routing (editable live via the dashboard Routing page):
+Access at `http://YOUR_SERVER_IP:3000` (server) or `http://localhost:3000` (Docker Desktop).
 
-| Keyword caller says | Routes to | Extension | Agent Language |
-|---|---|---|---|
-| "sales", "pricing", "billing" | Sales | 1002 | `en` |
-| "support", "technical", "help" | Support | 1003 | `en` |
-| "operator", "person", "anyone" | Operator | 1001 | `en` |
-
-### Agent Language per Extension
-
-Each routing rule stores the language spoken by the person at that extension (`agent_lang`). When a call is transferred, the system automatically compares the caller's detected language against the agent's language:
-
-```
-caller_lang == agent_lang  →  plain transfer (no relay, no overhead)
-caller_lang != agent_lang  →  TranslationRelay starts automatically
-```
-
-To mark an extension as Spanish-speaking, edit the routing rule in the dashboard and set **Agent Language** to `es`. No code changes needed — the relay activates or skips based purely on this value at call time.
-
-**Example:** Hire a Spanish-speaking support agent on ext 1004:
-1. Add routing rule: keyword `soporte` → extension `1004` → agent_lang `es`
-2. Spanish caller says "soporte" → routes to 1004 → same language → no relay
-3. English caller says "soporte" → routes to 1004 → different language → relay starts automatically
+| Page | What it shows |
+|---|---|
+| Dashboard | Live stats: total calls, scheduled, transferred, after-hours, avg duration |
+| Call Logs | Searchable call history with intent and disposition badges |
+| Call Detail | Full transcript + structured call-path events + LLM summary |
+| Routing | Keyword → extension rules with agent language (inline CRUD) |
+| Appointments | Scheduled callbacks with Google Calendar status |
+| Settings | Current agent configuration (v1.2: all new settings included) |
 
 ---
 
@@ -314,40 +392,41 @@ To mark an extension as Spanish-speaking, edit the routing rule in the dashboard
 helix-ai-virtual-receptionist/
 ├── agent/
 │   ├── main.py                  Entry point — FastAPI + ARI agent
-│   ├── ari_agent.py             Core call handler, TranslationRelay
-│   ├── api.py                   REST API for dashboard
-│   ├── config.py                All settings (Pydantic + .env)
-│   ├── database.py              SQLAlchemy models (CallLog, Appointment, RoutingRule)
-│   ├── .env.example             Template — copy to .env and edit
-│   ├── .env.windows             Pre-configured for Docker Desktop / Windows
+│   ├── ari_agent.py             Core call handler, business hours gate, retries,
+│   │                            DTMF, VIP routing, CallPath logger, voicemail,
+│   │                            TranslationRelay
+│   ├── api.py                   REST API — calls, routing, holidays, config, voicemails
+│   ├── config.py                All settings (Pydantic + .env), 15 new v1.2 settings
+│   ├── database.py              SQLAlchemy models: CallLog, Appointment, RoutingRule,
+│   │                            Holiday, VoicemailMessage
+│   ├── .env.example             Fully documented template — copy to .env and edit
 │   ├── stt/
 │   │   └── whisper_engine.py    faster-whisper STT, returns text + detected language
 │   ├── tts/
 │   │   └── piper_engine.py      Piper TTS, EN + ES voices
 │   ├── llm/
-│   │   ├── intent_engine.py     Ollama intent detection + conversation state
-│   │   └── translate_engine.py  EN ↔ ES translation via Ollama (fully local)
+│   │   ├── intent_engine.py     Ollama intent detection, FAQ loader, call summary
+│   │   └── translate_engine.py  EN ↔ ES translation via Ollama (local)
 │   ├── vad/
 │   │   └── silero_engine.py     Silero VAD for real-time speech detection
 │   ├── calendar/
 │   │   └── gcal.py              Google Calendar free/busy + booking
 │   └── routing/
-│       └── router.py            DB-backed keyword → extension routing
+│       └── router.py            DB-backed routing + VIP route + after-hours route
 ├── asterisk/
 │   └── etc/asterisk/
 │       ├── pjsip.conf           SIP extensions + NAT config
-│       ├── pjsip.windows.conf   Windows-specific (patched by deploy-windows.ps1)
-│       ├── extensions.conf      Dialplan (9999 → AI, internal ext-to-ext)
+│       ├── extensions.conf      Dialplan: 9999 → AI, internal ext-to-ext, [dtmf-menu]
 │       ├── ari.conf             ARI credentials
 │       ├── http.conf            ARI HTTP server
 │       └── rtp.conf             RTP port range (10000–20000)
 ├── dashboard/
 │   ├── client/src/pages/        React pages (Dashboard, CallLogs, Routing, Appointments, Settings)
-│   └── server/                  Express API proxy + mock data
+│   └── server/                  Express API proxy + mock data (holidays, voicemails, config PATCH)
 ├── docker/
 │   ├── docker-compose.yml       Linux/Ubuntu (GPU, host networking)
 │   ├── docker-compose.windows.yml  Windows Docker Desktop (bridge networking)
-│   ├── Dockerfile.agent         CUDA base image for GPU Whisper
+│   ├── Dockerfile.agent         CUDA base for GPU Whisper
 │   ├── Dockerfile.agent.windows CPU-only agent for Windows testing
 │   ├── Dockerfile.asterisk      Asterisk on Ubuntu 22.04
 │   └── Dockerfile.dashboard     Node.js dashboard
@@ -357,8 +436,7 @@ helix-ai-virtual-receptionist/
 │   ├── setup.sh                 Native (non-Docker) install script
 │   └── firewall.sh              UFW rules for Ubuntu server
 ├── deploy.sh                    One-shot Linux deploy script
-├── deploy-windows.ps1           One-shot Windows PowerShell deploy script
-└── docker-compose.yml           Symlink → docker/docker-compose.yml
+└── deploy-windows.ps1           One-shot Windows PowerShell deploy script
 ```
 
 ---
@@ -367,48 +445,33 @@ helix-ai-virtual-receptionist/
 
 | Component | Minimum | Recommended |
 |---|---|---|
-| GPU | Any CUDA GPU (4GB+) | RTX 4090 (this project) |
+| GPU | Any CUDA GPU (4 GB+) | RTX 4090 |
 | RAM | 8 GB | 16 GB+ |
 | OS | Ubuntu 22.04 | Ubuntu 22.04 |
-| Disk | 10 GB | 20 GB (models + recordings) |
+| Disk | 10 GB | 20 GB (models + voicemail recordings) |
 
-**Model footprint on GPU:**
+**Model VRAM footprint:**
 
 | Component | Model | VRAM |
 |---|---|---|
-| STT | `faster-whisper base` (multilingual) | ~150 MB |
-| LLM | `llama3.1:8b` | ~5 GB |
+| STT | faster-whisper base (multilingual) | ~150 MB |
+| LLM | llama3.1:8b | ~5 GB |
 | TTS | Piper (CPU, no GPU needed) | 0 |
 | **Total** | | **~5.2 GB** |
 
-The RTX 4090 (24 GB) handles all of this with room to spare. Works on a 3080 (10 GB) too.
-
-For Windows Docker Desktop testing, everything runs on CPU — slower but functional.
-
----
-
-## Dashboard
-
-Access at `http://192.168.4.31:3000` (server) or `http://localhost:3000` (Docker Desktop).
-
-| Page | What it shows |
-|---|---|
-| Dashboard | Live stats: total calls, scheduled, transferred, avg duration |
-| Call Logs | Searchable call history with intent badges |
-| Call Detail | Full transcript per call |
-| Routing | Keyword → extension rules (inline CRUD) |
-| Appointments | Scheduled callbacks with Google Calendar status |
-| Settings | Read-only view of current agent configuration |
+RTX 4090 (24 GB) handles everything with room to spare. Also works on a 3080 (10 GB).  
+Windows Docker Desktop testing runs on CPU — slower but functional.
 
 ---
 
 ## Roadmap
 
 - [ ] Barge-in / interrupt AI mid-sentence
-- [ ] Voicemail fallback (no answer → record + transcribe + notify)
 - [ ] SMS callback confirmation via Twilio
-- [ ] SIP trunk integration (Twilio, VoIP.ms) for external calls
-- [ ] Swap SQLite → PostgreSQL for production
+- [ ] SIP trunk integration (Twilio, VoIP.ms) for external inbound calls
+- [ ] Swap SQLite → PostgreSQL for production scale
 - [ ] Faster translation model (Helsinki-NLP opus-mt, ~100ms vs ~2s)
-- [ ] More languages (FR, DE, PT)
+- [ ] Additional languages (FR, DE, PT)
 - [ ] Wake-word detection to skip VAD on fast responses
+- [ ] Dashboard Holidays page (UI for `/api/holidays` CRUD)
+- [ ] Dashboard Voicemails page (playback + transcript view)

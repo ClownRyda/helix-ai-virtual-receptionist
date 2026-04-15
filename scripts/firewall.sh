@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-SUBNET="${1:-${PBX_LAN_SUBNET:-192.168.1.0/24}}"
+SUBNET="${1:-${PBX_LAN_SUBNET:-YOUR_LAN_SUBNET}}"  # e.g. 10.0.0.0/24
 
 echo "=== PBX Assistant Firewall Setup ==="
 echo "Allowing traffic from $SUBNET only"
