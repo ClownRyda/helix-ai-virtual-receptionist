@@ -1,8 +1,13 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.2-cyan) ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-v1.2-cyan)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.11+-blue)
+![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
+![Ollama](https://img.shields.io/badge/LLM-ollama%20local-purple)
+![Stars](https://img.shields.io/github/stars/ClownRyda/helix-ai-virtual-receptionist?style=flat)
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history.
+See [CHANGELOG.md](CHANGELOG.md) for full version history. · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
 
 A fully local, self-hosted AI phone receptionist. Answers calls, respects your business hours, handles after-hours callers gracefully, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, speaks English and Spanish — all without any cloud APIs.
 
@@ -461,6 +466,23 @@ helix-ai-virtual-receptionist/
 
 RTX 4090 (24 GB) handles everything with room to spare. Also works on a 3080 (10 GB).  
 Windows Docker Desktop testing runs on CPU — slower but functional.
+
+---
+
+## Built with
+
+| Layer | Technology |
+|---|---|
+| Telephony | [Asterisk 20](https://www.asterisk.org/) + PJSIP + ARI WebSocket |
+| Call control | Python asyncio + `aiohttp` ARI client |
+| Speech-to-text | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (multilingual, GPU) |
+| Voice activity | [Silero VAD](https://github.com/snakers4/silero-vad) |
+| LLM | [Ollama](https://ollama.com/) — `llama3.1:8b` (local, no cloud) |
+| Text-to-speech | [Piper TTS](https://github.com/rhasspy/piper) — EN + ES neural voices |
+| Scheduling | Google Calendar API (OAuth2) |
+| Database | SQLite + SQLAlchemy async |
+| API | FastAPI |
+| Dashboard | React + Tailwind + shadcn/ui + Express |
 
 ---
 
