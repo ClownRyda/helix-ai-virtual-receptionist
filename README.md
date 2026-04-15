@@ -20,7 +20,7 @@ Helix sits between your SIP callers and your team:
 - It can answer basic questions, offer a callback time, or transfer the call to a configured extension.
 - If the caller and employee speak different languages, it can relay the conversation between English and Spanish after the transfer.
 
-In practice, this makes the repo a working foundation for a small-business receptionist, call router, and bilingual call assistant.
+In practice, this is a working foundation for a small-business receptionist, call router, and bilingual call assistant that stays inside your own PBX environment.
 
 ## Core Capabilities
 
@@ -34,9 +34,17 @@ In practice, this makes the repo a working foundation for a small-business recep
 - Stores call logs, appointments, and routing rules locally
 - Exposes a dashboard for reviewing calls and editing routing behavior
 
-## Current Scope
+## Best Fit
 
-This repo is strongest as a local receptionist and call-routing system for internal extensions or LAN-based softphone testing. It is not presented here as a finished SaaS phone platform or production-hardened contact center product.
+Helix is a good fit if you want:
+
+- A front desk or receptionist workflow for a small business
+- Natural-language call handling instead of menu trees
+- English/Spanish call intake and bilingual handoff
+- Local control over call audio and models
+- A starting point you can customize for your own routing rules and business logic
+
+Helix is not positioned here as a finished hosted phone platform, a turnkey enterprise contact center, or a drop-in replacement for a commercial SIP carrier stack.
 
 ---
 
@@ -120,11 +128,13 @@ Agent (EN) ──speaks──▶ agent_snoop channel
 
 Two isolated snoop channels (one per participant) prevent audio mixing. Each has its own VAD and translation loop running concurrently.
 
-> **Latency note:** Each translation pass takes ~2–4 seconds on a modern NVIDIA GPU (Whisper + Ollama + Piper). Both parties experience a slight delay — similar to a phone interpreter. Acceptable for most use cases; upgrade path is a dedicated translation model (Helsinki-NLP opus-mt) for ~100ms latency.
+> **Latency note:** Each translation pass takes ~2–4 seconds on a modern NVIDIA GPU (Whisper + Ollama + Piper). That means live bilingual calls feel more like using a human interpreter than a zero-latency phone call.
 
 ---
 
 ## Quick Start
+
+If you just want to see the system working, start with Docker first. If you want to run it as a real always-on service on your own server, use the native Ubuntu path.
 
 ### Option A — Windows (Docker Desktop, for testing)
 
@@ -181,6 +191,8 @@ ollama pull llama3.1:8b
 # 5. Start agent
 cd agent && python main.py
 ```
+
+After the stack is up, register a softphone extension and dial `9999` to talk to the receptionist.
 
 ---
 
@@ -282,6 +294,8 @@ copy agent\.env.example agent\.env  # Windows
 
 ## Google Calendar Setup
 
+Google Calendar is optional. If you skip it, the receptionist can still answer calls, detect intent, and transfer calls, but it will not be able to book callback times.
+
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Create a project → Enable the **Google Calendar API**
 3. Create **OAuth 2.0 credentials** → Desktop app type
@@ -306,11 +320,13 @@ Quick reference:
 | Extension 3 | `1003` / password set in `pjsip.conf` |
 | AI Receptionist | Dial **`9999`** |
 
+The softphone setup exists mainly so you can test the receptionist end-to-end on your LAN before connecting it to a wider phone environment.
+
 ---
 
 ## Extension Routing
 
-Default routing (editable live via the dashboard Routing page):
+The receptionist decides where to send a caller based on what they say. Default routing is editable live from the dashboard:
 
 | Keyword caller says | Routes to | Extension | Agent Language |
 |---|---|---|---|
@@ -320,14 +336,14 @@ Default routing (editable live via the dashboard Routing page):
 
 ### Agent Language per Extension
 
-Each routing rule stores the language spoken by the person at that extension (`agent_lang`). When a call is transferred, the system automatically compares the caller's detected language against the agent's language:
+Each routing rule also stores the language spoken by the person at that extension (`agent_lang`). When a call is transferred, the system compares the caller's detected language to the employee's language:
 
 ```
 caller_lang == agent_lang  →  plain transfer (no relay, no overhead)
 caller_lang != agent_lang  →  TranslationRelay starts automatically
 ```
 
-To mark an extension as Spanish-speaking, edit the routing rule in the dashboard and set **Agent Language** to `es`. No code changes needed — the relay activates or skips based purely on this value at call time.
+To mark an extension as Spanish-speaking, edit the routing rule in the dashboard and set **Agent Language** to `es`. No code changes are needed.
 
 **Example:** Hire a Spanish-speaking support agent on ext 1004:
 1. Add routing rule: keyword `soporte` → extension `1004` → agent_lang `es`
@@ -417,7 +433,9 @@ For Windows Docker Desktop testing, everything runs on CPU — slower but functi
 
 ## Dashboard
 
-Access at `http://YOUR_SERVER_IP:3000` (server) or `http://localhost:3000` (Docker Desktop).
+Access the dashboard at `http://YOUR_SERVER_IP:3000` (server) or `http://localhost:3000` (Docker Desktop).
+
+The dashboard is the operator view for the system. It lets you review what happened on calls and adjust routing without editing code.
 
 | Page | What it shows |
 |---|---|
