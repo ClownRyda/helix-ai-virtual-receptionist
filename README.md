@@ -1,5 +1,9 @@
 # Helix AI Virtual Receptionist
 
+![Version](https://img.shields.io/badge/version-v1.1-cyan) ![License](https://img.shields.io/badge/license-MIT-green)
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
+
 A fully local, self-hosted AI phone receptionist. Answers calls, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, and speaks English and Spanish — all without any cloud APIs.
 
 **Server:** Ubuntu 22.04 + RTX 4090 at 192.168.4.31  
