@@ -1,6 +1,8 @@
 # Helix AI Virtual Receptionist
 
-A fully local, self-hosted AI phone receptionist. Answers calls, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, and speaks English and Spanish — all without any cloud APIs.
+A fully local, self-hosted AI phone receptionist for Asterisk-based phone systems. It answers inbound calls, speaks with callers in English or Spanish, figures out what they need, schedules callbacks with Google Calendar, and transfers calls to the right extension when a human should take over.
+
+This project is for people who want an on-prem phone assistant that runs on their own hardware instead of sending call audio to cloud speech or voice APIs.
 
 **Server:** Ubuntu 22.04 + NVIDIA GPU on your LAN  
 **Testing:** Docker Desktop on Windows or native install on Ubuntu  
@@ -8,7 +10,37 @@ A fully local, self-hosted AI phone receptionist. Answers calls, detects intent,
 
 ---
 
-## What It Does
+## What This Project Is
+
+Helix sits between your SIP callers and your team:
+
+- A caller dials your PBX.
+- Asterisk answers and hands the call to the Python agent.
+- The agent listens to the caller, detects language and intent, and decides what to do next.
+- It can answer basic questions, offer a callback time, or transfer the call to a configured extension.
+- If the caller and employee speak different languages, it can relay the conversation between English and Spanish after the transfer.
+
+In practice, this makes the repo a working foundation for a small-business receptionist, call router, and bilingual call assistant.
+
+## Core Capabilities
+
+- Answers inbound SIP calls through Asterisk and ARI
+- Speaks English and Spanish with automatic caller language detection
+- Handles receptionist-style conversations instead of button-based IVR menus
+- Routes calls by intent such as sales, support, or operator
+- Books callbacks against Google Calendar availability
+- Transfers to live staff extensions
+- Runs an English/Spanish translation relay after transfer when caller and staff language differ
+- Stores call logs, appointments, and routing rules locally
+- Exposes a dashboard for reviewing calls and editing routing behavior
+
+## Current Scope
+
+This repo is strongest as a local receptionist and call-routing system for internal extensions or LAN-based softphone testing. It is not presented here as a finished SaaS phone platform or production-hardened contact center product.
+
+---
+
+## What Happens On A Call
 
 ```
 Caller dials in
@@ -35,7 +67,7 @@ books appointment  (sales/support)    in caller's lang
 
 ---
 
-## Architecture
+## System Architecture
 
 ```
 Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
