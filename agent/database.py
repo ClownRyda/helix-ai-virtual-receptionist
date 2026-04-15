@@ -1,8 +1,9 @@
 """
-Database models and setup — call logs, scheduled appointments, routing rules.
+Database models and setup — call logs, appointments, routing rules,
+holidays, and voicemail messages.
 """
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Float
+from datetime import datetime, date
+from sqlalchemy import Column, Integer, String, DateTime, Date, Text, Boolean, Float
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config import settings
@@ -24,11 +25,14 @@ class CallLog(Base):
     duration_seconds = Column(Float, nullable=True)
     intent = Column(String(64), nullable=True)          # schedule | transfer | info | unknown
     intent_detail = Column(String(128), nullable=True)  # e.g. "sales", "support"
-    disposition = Column(String(32), nullable=True)     # answered | transferred | scheduled | hangup
+    disposition = Column(String(32), nullable=True)     # answered | transferred | scheduled | hangup | after_hours
     transferred_to = Column(String(16), nullable=True)  # extension number
     transcript = Column(Text, nullable=True)
     appointment_id = Column(String(128), nullable=True) # Google Calendar event ID
+    # notes stores structured call-path JSON (list of state transitions)
     notes = Column(Text, nullable=True)
+    # Optional LLM-generated summary of the call
+    summary = Column(Text, nullable=True)
 
 
 class Appointment(Base):
@@ -56,10 +60,40 @@ class RoutingRule(Base):
     active = Column(Boolean, default=True)
     priority = Column(Integer, default=100)
     # Language spoken by the person at this extension.
-    # The relay compares this against the caller's detected language.
-    # If they differ, live translation kicks in automatically.
-    # 'en' = English, 'es' = Spanish, etc.
     agent_lang = Column(String(8), default="en")
+
+
+class Holiday(Base):
+    """
+    Business holidays — on these dates the system behaves as if
+    closed regardless of business_hours_start/end.
+    """
+    __tablename__ = "holidays"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, unique=True, nullable=False, index=True)
+    name = Column(String(128), nullable=False)       # e.g. "Christmas Day"
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VoicemailMessage(Base):
+    """
+    Voicemail recordings left by callers during after-hours or no-answer.
+    """
+    __tablename__ = "voicemail_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    call_id = Column(String(64), nullable=True, index=True)
+    caller_id = Column(String(32), nullable=True)
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+    duration_sec = Column(Float, nullable=True)
+    # Filesystem path to the recorded .wav file
+    audio_path = Column(String(512), nullable=True)
+    # Whisper transcript of the voicemail (if voicemail_transcribe=true)
+    transcript = Column(Text, nullable=True)
+    # unread | read | archived
+    status = Column(String(16), default="unread")
 
 
 async def init_db():

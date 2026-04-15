@@ -3,6 +3,7 @@ Central configuration — all values sourced from environment / .env file.
 """
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from typing import Literal
 
 
 class Settings(BaseSettings):
@@ -25,22 +26,13 @@ class Settings(BaseSettings):
 
     # ── Silero VAD ──────────────────────────────────────────────
     vad_threshold: float = Field(0.5, env="VAD_THRESHOLD")
-    # Speech probability above this → SPEECH.  0.5 works well for most cases.
-    # Raise to 0.6-0.7 in noisy environments to reduce false positives.
     vad_min_silence_ms: int = Field(600, env="VAD_MIN_SILENCE_MS")
-    # Milliseconds of silence after speech before we consider the utterance done.
-    # 600 ms is a good balance — short enough for responsive turn-taking,
-    # long enough to survive brief pauses mid-sentence.
     vad_speech_pad_ms: int = Field(100, env="VAD_SPEECH_PAD_MS")
-    # Padding added to start/end of detected speech segments (captures soft onsets).
 
     # ── Whisper STT ─────────────────────────────────────────────
     whisper_model: str = Field("base.en", env="WHISPER_MODEL")
-    # Options: tiny.en, base.en, small.en, medium.en, large-v3
     whisper_device: str = Field("cuda", env="WHISPER_DEVICE")
-    # cuda | cpu | auto
     whisper_compute_type: str = Field("float16", env="WHISPER_COMPUTE_TYPE")
-    # float16 (GPU), int8 (CPU)
 
     # ── Ollama LLM ──────────────────────────────────────────────
     ollama_host: str = Field("http://localhost:11434", env="OLLAMA_HOST")
@@ -53,27 +45,55 @@ class Settings(BaseSettings):
     piper_model_path: str = Field("/opt/piper/models", env="PIPER_MODEL_PATH")
 
     # ── Bilingual / translation ──────────────────────────────────
-    # Languages the AI attendant supports. First is the default/fallback.
     supported_languages: str = Field("en,es", env="SUPPORTED_LANGUAGES")
-    # When True, Whisper auto-detects caller language each turn.
-    # When False, uses default_language for all calls.
     auto_detect_language: bool = Field(True, env="AUTO_DETECT_LANGUAGE")
-    # Whisper model to use for multilingual calls (must NOT be a .en-only model)
     whisper_model_multilingual: str = Field("base", env="WHISPER_MODEL_MULTILINGUAL")
 
     # ── Google Calendar ─────────────────────────────────────────
     google_credentials_file: str = Field("credentials.json", env="GOOGLE_CREDENTIALS_FILE")
     google_token_file: str = Field("token.json", env="GOOGLE_TOKEN_FILE")
     google_calendar_id: str = Field("primary", env="GOOGLE_CALENDAR_ID")
-    # Slot duration in minutes for scheduling
     appointment_slot_minutes: int = Field(30, env="APPOINTMENT_SLOT_MINUTES")
-    # How many days ahead to look for availability
     availability_lookahead_days: int = Field(7, env="AVAILABILITY_LOOKAHEAD_DAYS")
 
     # ── Business hours ──────────────────────────────────────────
     business_hours_start: int = Field(9, env="BUSINESS_HOURS_START")   # 9 AM
     business_hours_end: int = Field(17, env="BUSINESS_HOURS_END")       # 5 PM
     business_timezone: str = Field("America/Chicago", env="BUSINESS_TIMEZONE")
+
+    # ── After-hours / holiday behavior ──────────────────────────
+    # Comma-separated ISO dates that are holidays, e.g. "2026-12-25,2027-01-01"
+    holiday_dates: str = Field("", env="HOLIDAY_DATES")
+
+    # What to offer callers outside business hours or on holidays.
+    # "voicemail"  → record a message (requires VOICEMAIL_ENABLED=true)
+    # "callback"   → tell caller we will call back next business day
+    # "schedule"   → offer to schedule via Google Calendar (AI flow continues)
+    # "emergency"  → transfer to EMERGENCY_EXTENSION immediately
+    after_hours_mode: Literal["voicemail", "callback", "schedule", "emergency"] = Field(
+        "callback", env="AFTER_HOURS_MODE"
+    )
+
+    # Extension reached for after_hours_mode=emergency or operator fallback
+    operator_extension: str = Field("1001", env="OPERATOR_EXTENSION")
+    emergency_extension: str = Field("1001", env="EMERGENCY_EXTENSION")
+
+    # ── Retry / fallback behavior ────────────────────────────────
+    # Max listen retries before offering operator or hanging up
+    max_retries: int = Field(3, env="MAX_RETRIES")
+    # Seconds to wait for caller audio before counting a silence event
+    silence_timeout_sec: int = Field(8, env="SILENCE_TIMEOUT_SEC")
+
+    # ── DTMF fallback menu ───────────────────────────────────────
+    # Set true to announce a keypress menu after the initial greeting.
+    # Caller can always speak naturally; DTMF is a secondary escape hatch.
+    dtmf_enabled: bool = Field(False, env="DTMF_ENABLED")
+    # JSON map of digit → extension, e.g. {"1":"1002","2":"1003","0":"1001"}
+    dtmf_map: str = Field('{"1": "1002", "2": "1003", "0": "1001"}', env="DTMF_MAP")
+
+    # ── VIP / known-caller routing ───────────────────────────────
+    # Comma-separated caller IDs that bypass the AI and go direct to operator
+    vip_callers: str = Field("", env="VIP_CALLERS")
 
     # ── Agent / LLM behavior ─────────────────────────────────────
     agent_name: str = Field("Alex", env="AGENT_NAME")
@@ -89,7 +109,6 @@ class Settings(BaseSettings):
     )
 
     # ── Extension routing rules ──────────────────────────────────
-    # JSON string mapping intent keywords → extension numbers
     routing_rules: str = Field(
         '{"sales": "1002", "billing": "1002", "support": "1003", '
         '"technical": "1003", "operator": "1001", "default": "1001"}',
@@ -102,6 +121,21 @@ class Settings(BaseSettings):
 
     # ── Database ─────────────────────────────────────────────────
     database_url: str = Field("sqlite+aiosqlite:///./pbx_assistant.db", env="DATABASE_URL")
+
+    # ── Optional feature flags ───────────────────────────────────
+    # Voicemail recording (after-hours or no-answer).
+    # Requires a writable VOICEMAIL_DIR and optionally Whisper for transcription.
+    voicemail_enabled: bool = Field(False, env="VOICEMAIL_ENABLED")
+    voicemail_dir: str = Field("/var/spool/helix/voicemail", env="VOICEMAIL_DIR")
+    voicemail_transcribe: bool = Field(True, env="VOICEMAIL_TRANSCRIBE")
+
+    # Automatic call summary generated by LLM at call end.
+    call_summary_enabled: bool = Field(False, env="CALL_SUMMARY_ENABLED")
+
+    # FAQ / business-info lookup from a local plain-text knowledge file.
+    # When enabled, matching chunks are injected into the LLM system prompt.
+    faq_enabled: bool = Field(False, env="FAQ_ENABLED")
+    faq_file: str = Field("faq.txt", env="FAQ_FILE")
 
     class Config:
         env_file = ".env"

@@ -42,7 +42,31 @@ const mockConfig = {
   appointment_slot_minutes: 30,
   availability_lookahead_days: 7,
   google_calendar_id: "primary",
+  // v1.2 fields
+  after_hours_mode: "callback",
+  operator_extension: "1001",
+  emergency_extension: "1001",
+  max_retries: 3,
+  silence_timeout_sec: 8,
+  dtmf_enabled: false,
+  dtmf_map: '{"1":"1002","2":"1003","0":"1001"}',
+  vip_callers: "",
+  voicemail_enabled: false,
+  voicemail_dir: "/var/spool/helix/voicemail",
+  voicemail_transcribe: true,
+  call_summary_enabled: false,
+  faq_enabled: false,
+  faq_file: "faq.txt",
 };
+
+const mockHolidays = [
+  { id: 1, date: "2026-07-04", name: "Independence Day",    active: true,  created_at: new Date().toISOString() },
+  { id: 2, date: "2026-11-26", name: "Thanksgiving Day",    active: true,  created_at: new Date().toISOString() },
+  { id: 3, date: "2026-12-25", name: "Christmas Day",       active: true,  created_at: new Date().toISOString() },
+  { id: 4, date: "2027-01-01", name: "New Year's Day",      active: true,  created_at: new Date().toISOString() },
+];
+
+const mockVoicemails: any[] = [];
 
 export async function registerRoutes(
   httpServer: Server,
@@ -94,6 +118,35 @@ export async function registerRoutes(
   app.get("/api/appointments", (_req, res) => res.json(mockAppointments));
 
   app.get("/api/config", (_req, res) => res.json(mockConfig));
+  app.patch("/api/config", (req, res) => {
+    Object.assign(mockConfig, req.body);
+    res.json({ updated: Object.keys(req.body), note: "Demo mode — restart agent to apply on server." });
+  });
+
+  app.get("/api/holidays", (_req, res) => res.json(mockHolidays));
+  app.post("/api/holidays", (req, res) => {
+    const holiday = { id: mockHolidays.length + 1, created_at: new Date().toISOString(), active: true, ...req.body };
+    mockHolidays.push(holiday);
+    res.status(201).json(holiday);
+  });
+  app.delete("/api/holidays/:id", (req, res) => {
+    const idx = mockHolidays.findIndex(h => h.id === parseInt(req.params.id));
+    if (idx !== -1) mockHolidays.splice(idx, 1);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/voicemails", (_req, res) => res.json(mockVoicemails));
+  app.get("/api/voicemails/:id", (req, res) => {
+    const vm = mockVoicemails.find(v => v.id === parseInt(req.params.id));
+    if (!vm) return res.status(404).json({ error: "Not found" });
+    res.json(vm);
+  });
+  app.patch("/api/voicemails/:id", (req, res) => {
+    const vm = mockVoicemails.find(v => v.id === parseInt(req.params.id));
+    if (!vm) return res.status(404).json({ error: "Not found" });
+    Object.assign(vm, req.body);
+    res.json(vm);
+  });
 
   return httpServer;
 }

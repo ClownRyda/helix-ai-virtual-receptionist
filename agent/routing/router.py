@@ -2,9 +2,14 @@
 Extension routing — maps detected intents/departments to Asterisk extensions.
 Rules are loaded from the database (editable via the dashboard).
 
-Each rule now carries an agent_lang field so the transfer flow can
+Each rule carries an agent_lang field so the transfer flow can
 automatically start a TranslationRelay when the caller and call taker
 speak different languages.
+
+v1.2 additions:
+  - get_after_hours_route()  — returns the emergency/operator extension
+  - get_vip_route()          — direct-to-operator for known VIP caller IDs
+  - Priority and match-source are logged on every routing decision
 """
 import json
 from dataclasses import dataclass
@@ -29,7 +34,50 @@ _FALLBACK_AGENT_LANG: dict[str, str] = {
 class RouteResult:
     """Result of a routing lookup — extension + the language of the person there."""
     extension: str
-    agent_lang: str   # language spoken by the person at this extension
+    agent_lang: str       # language spoken by the person at this extension
+    match_source: str = "unknown"   # "db", "config", "default", "vip", "after_hours"
+    matched_keyword: str = ""
+
+
+def get_vip_route(caller_id: str) -> RouteResult | None:
+    """
+    If the caller ID is in the VIP_CALLERS list, bypass the AI and route
+    directly to the operator extension.
+
+    Returns a RouteResult or None if the caller is not a VIP.
+    """
+    if not settings.vip_callers:
+        return None
+    vip_list = [c.strip() for c in settings.vip_callers.split(",") if c.strip()]
+    if caller_id in vip_list:
+        ext = settings.operator_extension
+        log.info("VIP caller — direct to operator",
+                 caller_id=caller_id, extension=ext)
+        return RouteResult(
+            extension=ext,
+            agent_lang="en",
+            match_source="vip",
+            matched_keyword=caller_id,
+        )
+    return None
+
+
+def get_after_hours_route() -> RouteResult | None:
+    """
+    Returns a RouteResult for after-hours emergency transfers.
+    Only relevant when after_hours_mode == 'emergency'.
+    Returns None for all other modes (caller is handled in the agent).
+    """
+    if settings.after_hours_mode == "emergency":
+        ext = settings.emergency_extension
+        log.info("After-hours emergency route", extension=ext)
+        return RouteResult(
+            extension=ext,
+            agent_lang="en",
+            match_source="after_hours",
+            matched_keyword="emergency",
+        )
+    return None
 
 
 async def get_route_for_intent(
@@ -46,8 +94,15 @@ async def get_route_for_intent(
       3. Default operator (1001, English)
     """
     if not department and intent == "transfer":
-        ext = _FALLBACK_RULES.get("default", "1001")
-        return RouteResult(extension=ext, agent_lang="en")
+        ext = _FALLBACK_RULES.get("default", settings.operator_extension)
+        log.info("Routing to default (no department)",
+                 extension=ext, match_source="default")
+        return RouteResult(
+            extension=ext,
+            agent_lang="en",
+            match_source="default",
+            matched_keyword="default",
+        )
 
     lookup_key = (department or "").lower()
 
@@ -63,22 +118,30 @@ async def get_route_for_intent(
             log.info("Routing via DB rule",
                      keyword=lookup_key,
                      extension=rule.extension,
-                     agent_lang=rule.agent_lang)
+                     agent_lang=rule.agent_lang,
+                     priority=rule.priority)
             return RouteResult(
                 extension=rule.extension,
                 agent_lang=rule.agent_lang or "en",
+                match_source="db",
+                matched_keyword=lookup_key,
             )
     except Exception as e:
         log.warning("DB routing lookup failed, using fallback", error=str(e))
 
     # Fallback to config rules
-    ext = _FALLBACK_RULES.get(lookup_key) or _FALLBACK_RULES.get("default", "1001")
+    ext = _FALLBACK_RULES.get(lookup_key) or _FALLBACK_RULES.get("default", settings.operator_extension)
     agent_lang = _FALLBACK_AGENT_LANG.get(ext, "en")
     log.info("Routing via config fallback",
              keyword=lookup_key,
              extension=ext,
              agent_lang=agent_lang)
-    return RouteResult(extension=ext, agent_lang=agent_lang)
+    return RouteResult(
+        extension=ext,
+        agent_lang=agent_lang,
+        match_source="config",
+        matched_keyword=lookup_key,
+    )
 
 
 # Keep old name as alias so nothing else breaks

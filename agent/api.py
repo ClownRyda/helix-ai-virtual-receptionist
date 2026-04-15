@@ -1,21 +1,28 @@
 """
-FastAPI REST API — exposes call logs, routing rules, appointments, and config
-for the web dashboard.
+FastAPI REST API — exposes call logs, routing rules, appointments, config,
+holidays, and voicemail messages for the web dashboard.
+
+v1.2 additions:
+  - GET/POST/DELETE /api/holidays
+  - PATCH /api/config  (write selected runtime settings back to .env)
+  - GET /api/voicemails, GET /api/voicemails/{id}, PATCH /api/voicemails/{id}
 """
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Literal
+from datetime import datetime, date
+import os
+import re
 
-from database import CallLog, Appointment, RoutingRule, get_db
+from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, get_db
 from routing.router import get_all_rules, upsert_rule
 from calendar.gcal import get_available_slots
 from config import settings
 
-app = FastAPI(title="PBX Assistant API", version="1.0.0")
+app = FastAPI(title="Helix AI API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +32,7 @@ app.add_middleware(
 )
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Pydantic models ───────────────────────────────────────────────────────────
 
 class RoutingRuleCreate(BaseModel):
     keyword: str
@@ -39,6 +46,34 @@ class RoutingRuleUpdate(BaseModel):
     description: Optional[str] = None
     active: Optional[bool] = None
     priority: Optional[int] = None
+
+
+class HolidayCreate(BaseModel):
+    date: str      # ISO format: YYYY-MM-DD
+    name: str
+    active: bool = True
+
+
+class ConfigPatch(BaseModel):
+    agent_name: Optional[str] = None
+    business_name: Optional[str] = None
+    business_hours_start: Optional[int] = None
+    business_hours_end: Optional[int] = None
+    business_timezone: Optional[str] = None
+    after_hours_mode: Optional[Literal["voicemail", "callback", "schedule", "emergency"]] = None
+    operator_extension: Optional[str] = None
+    emergency_extension: Optional[str] = None
+    max_retries: Optional[int] = None
+    dtmf_enabled: Optional[bool] = None
+    dtmf_map: Optional[str] = None
+    vip_callers: Optional[str] = None
+    voicemail_enabled: Optional[bool] = None
+    call_summary_enabled: Optional[bool] = None
+    faq_enabled: Optional[bool] = None
+
+
+class VoicemailStatusPatch(BaseModel):
+    status: Literal["unread", "read", "archived"]
 
 
 # ── Call logs ─────────────────────────────────────────────────────────────────
@@ -87,6 +122,7 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)):
         "transcript": call.transcript,
         "appointment_id": call.appointment_id,
         "notes": call.notes,
+        "summary": call.summary,
     }
 
 
@@ -97,6 +133,8 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     total = len(calls)
     transferred = sum(1 for c in calls if c.disposition == "transferred")
     scheduled = sum(1 for c in calls if c.disposition == "scheduled")
+    after_hours = sum(1 for c in calls if c.disposition == "after_hours")
+    voicemail = sum(1 for c in calls if c.disposition == "voicemail")
     avg_duration = (
         sum(c.duration_seconds for c in calls if c.duration_seconds) / total
         if total > 0 else 0
@@ -105,7 +143,9 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         "total_calls": total,
         "transferred": transferred,
         "scheduled": scheduled,
-        "hangup": total - transferred - scheduled,
+        "after_hours": after_hours,
+        "voicemail": voicemail,
+        "hangup": total - transferred - scheduled - after_hours - voicemail,
         "avg_duration_seconds": round(avg_duration, 1),
     }
 
@@ -120,7 +160,7 @@ async def list_rules(db: AsyncSession = Depends(get_db)):
 @app.post("/api/rules")
 async def create_rule(body: RoutingRuleCreate, db: AsyncSession = Depends(get_db)):
     return await upsert_rule(
-        body.keyword, body.extension, body.description or "", body.priority, db
+        body.keyword, body.extension, body.description or "", body.priority, db=db
     )
 
 
@@ -187,6 +227,55 @@ async def get_calendar_slots(days: int = 7, num_slots: int = 10):
     ]
 
 
+# ── Holidays ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/holidays")
+async def list_holidays(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Holiday).order_by(Holiday.date))
+    holidays = result.scalars().all()
+    return [
+        {
+            "id": h.id,
+            "date": h.date.isoformat(),
+            "name": h.name,
+            "active": h.active,
+            "created_at": h.created_at.isoformat() if h.created_at else None,
+        }
+        for h in holidays
+    ]
+
+
+@app.post("/api/holidays")
+async def create_holiday(body: HolidayCreate, db: AsyncSession = Depends(get_db)):
+    try:
+        holiday_date = date.fromisoformat(body.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    # Check for existing
+    result = await db.execute(select(Holiday).where(Holiday.date == holiday_date))
+    existing = result.scalars().first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Holiday on {body.date} already exists.")
+
+    holiday = Holiday(date=holiday_date, name=body.name, active=body.active)
+    db.add(holiday)
+    await db.commit()
+    await db.refresh(holiday)
+    return {"id": holiday.id, "date": holiday.date.isoformat(), "name": holiday.name, "active": holiday.active}
+
+
+@app.delete("/api/holidays/{holiday_id}")
+async def delete_holiday(holiday_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Holiday).where(Holiday.id == holiday_id))
+    holiday = result.scalars().first()
+    if not holiday:
+        raise HTTPException(status_code=404, detail="Holiday not found")
+    await db.delete(holiday)
+    await db.commit()
+    return {"deleted": holiday_id}
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/config")
@@ -203,9 +292,141 @@ async def get_config():
         "appointment_slot_minutes": settings.appointment_slot_minutes,
         "availability_lookahead_days": settings.availability_lookahead_days,
         "google_calendar_id": settings.google_calendar_id,
+        # v1.2 fields
+        "after_hours_mode": settings.after_hours_mode,
+        "operator_extension": settings.operator_extension,
+        "emergency_extension": settings.emergency_extension,
+        "max_retries": settings.max_retries,
+        "silence_timeout_sec": settings.silence_timeout_sec,
+        "dtmf_enabled": settings.dtmf_enabled,
+        "dtmf_map": settings.dtmf_map,
+        "vip_callers": settings.vip_callers,
+        "voicemail_enabled": settings.voicemail_enabled,
+        "voicemail_dir": settings.voicemail_dir,
+        "voicemail_transcribe": settings.voicemail_transcribe,
+        "call_summary_enabled": settings.call_summary_enabled,
+        "faq_enabled": settings.faq_enabled,
+        "faq_file": settings.faq_file,
     }
 
 
+@app.patch("/api/config")
+async def patch_config(body: ConfigPatch):
+    """
+    Write selected runtime settings back to the .env file.
+    Changes take effect on the next agent restart.
+    """
+    env_file = ".env"
+    if not os.path.exists(env_file):
+        raise HTTPException(status_code=404, detail=".env file not found")
+
+    with open(env_file, "r") as f:
+        content = f.read()
+
+    updates = body.dict(exclude_none=True)
+    env_key_map = {
+        "agent_name": "AGENT_NAME",
+        "business_name": "BUSINESS_NAME",
+        "business_hours_start": "BUSINESS_HOURS_START",
+        "business_hours_end": "BUSINESS_HOURS_END",
+        "business_timezone": "BUSINESS_TIMEZONE",
+        "after_hours_mode": "AFTER_HOURS_MODE",
+        "operator_extension": "OPERATOR_EXTENSION",
+        "emergency_extension": "EMERGENCY_EXTENSION",
+        "max_retries": "MAX_RETRIES",
+        "dtmf_enabled": "DTMF_ENABLED",
+        "dtmf_map": "DTMF_MAP",
+        "vip_callers": "VIP_CALLERS",
+        "voicemail_enabled": "VOICEMAIL_ENABLED",
+        "call_summary_enabled": "CALL_SUMMARY_ENABLED",
+        "faq_enabled": "FAQ_ENABLED",
+    }
+
+    for field, value in updates.items():
+        env_key = env_key_map.get(field)
+        if not env_key:
+            continue
+        str_value = str(value) if not isinstance(value, bool) else str(value).upper()
+        # Replace existing key or append
+        pattern = rf"^{env_key}=.*$"
+        new_line = f"{env_key}={str_value}"
+        if re.search(pattern, content, flags=re.MULTILINE):
+            content = re.sub(pattern, new_line, content, flags=re.MULTILINE)
+        else:
+            content += f"\n{new_line}"
+
+    with open(env_file, "w") as f:
+        f.write(content)
+
+    return {"updated": list(updates.keys()), "note": "Restart the agent for changes to take effect."}
+
+
+# ── Voicemails ────────────────────────────────────────────────────────────────
+
+@app.get("/api/voicemails")
+async def list_voicemails(db: AsyncSession = Depends(get_db)):
+    if not settings.voicemail_enabled:
+        return []
+    result = await db.execute(
+        select(VoicemailMessage).order_by(desc(VoicemailMessage.recorded_at))
+    )
+    vms = result.scalars().all()
+    return [
+        {
+            "id": v.id,
+            "call_id": v.call_id,
+            "caller_id": v.caller_id,
+            "recorded_at": v.recorded_at.isoformat() if v.recorded_at else None,
+            "duration_sec": v.duration_sec,
+            "transcript": v.transcript,
+            "status": v.status,
+            "audio_path": v.audio_path,
+        }
+        for v in vms
+    ]
+
+
+@app.get("/api/voicemails/{vm_id}")
+async def get_voicemail(vm_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(VoicemailMessage).where(VoicemailMessage.id == vm_id))
+    vm = result.scalars().first()
+    if not vm:
+        raise HTTPException(status_code=404, detail="Voicemail not found")
+    return {
+        "id": vm.id,
+        "call_id": vm.call_id,
+        "caller_id": vm.caller_id,
+        "recorded_at": vm.recorded_at.isoformat() if vm.recorded_at else None,
+        "duration_sec": vm.duration_sec,
+        "transcript": vm.transcript,
+        "status": vm.status,
+        "audio_path": vm.audio_path,
+    }
+
+
+@app.patch("/api/voicemails/{vm_id}")
+async def update_voicemail_status(vm_id: int, body: VoicemailStatusPatch, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(VoicemailMessage).where(VoicemailMessage.id == vm_id))
+    vm = result.scalars().first()
+    if not vm:
+        raise HTTPException(status_code=404, detail="Voicemail not found")
+    vm.status = body.status
+    await db.commit()
+    return {"id": vm.id, "status": vm.status}
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "pbx-assistant"}
+    return {
+        "status": "ok",
+        "service": "helix-ai",
+        "version": "1.2.0",
+        "features": {
+            "voicemail": settings.voicemail_enabled,
+            "call_summary": settings.call_summary_enabled,
+            "faq": settings.faq_enabled,
+            "dtmf": settings.dtmf_enabled,
+        }
+    }
