@@ -9,8 +9,12 @@ uvicorn[standard]>=0.29.0
 # STT - faster-whisper (local, CTranslate2 backend)
 faster-whisper>=1.0.0
 
-# TTS - Piper (installed separately via pip)
-piper-tts>=1.2.0
+# TTS - Kokoro (82M parameter neural TTS, Apache-licensed)
+# Kokoro model weights download automatically from HuggingFace on first use.
+# espeak-ng (system package) is required for OOD phoneme fallback and for
+# languages without Kokoro support (DE, RO, HE).
+kokoro>=0.9.2
+misaki[en]>=0.9.2    # phonemizer for EN, ES, FR, IT — required by Kokoro
 
 # LLM - Ollama Python client
 ollama>=0.2.0

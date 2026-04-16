@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.5-cyan)
+![Version](https://img.shields.io/badge/version-v1.6-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -45,7 +45,7 @@ Llama 3.1 determines intent
    ▼              ▼                      ▼
 Schedule      Transfer              Answer info
    │              │                      │
-Calendar      Route to ext         Piper TTS reply
+Calendar      Route to ext         Kokoro TTS reply
 books slot    (DB rules)           in caller's lang
                    │
           caller_lang ≠ agent_lang?
@@ -74,7 +74,7 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
                ├── faster-whisper         speech → text (GPU)
                ├── Ollama llama3.1:8b     intent + conversation + FAQ
                ├── translate_engine       EN ↔ ES via Ollama (local)
-               ├── Piper TTS              text → speech (EN + ES voices)
+               ├── Kokoro TTS             text → speech (EN/ES/FR/IT) + espeak-ng (DE/RO/HE)
                ├── Google Calendar        scheduling
                ├── SQLite                 call logs + routing rules + holidays + voicemail
                └── CallPath logger        structured per-call event log
@@ -102,19 +102,19 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
 - All prompts, retry messages, DTMF menus, after-hours messages, and operator fallback are localized in all 7 languages
 - Greeting tells caller "no buttons to press — just speak naturally"
 - All AI responses generated directly in the caller's detected language
-- TTS voices: Piper neural voices for EN/ES/FR/IT/DE/RO — espeak-ng for Hebrew (no Piper voice available)
+- TTS voices: Kokoro neural voices for EN/ES/FR/IT — espeak-ng for DE/RO/HE (no Kokoro voice available)
 
 ### Live translation relay (during transfers)
 After a call is transferred to a live person, if the caller and the agent speak different languages, a **TranslationRelay** starts automatically — both parties just speak normally:
 
 ```
 Caller (ES) ──speaks──▶ caller_snoop channel
-                              │ Whisper ES → translate ES→EN → Piper EN
+                              │ Whisper ES → translate ES→EN → Kokoro EN
                               ▼
                       Agent hears English
 
 Agent (EN) ──speaks──▶ agent_snoop channel
-                              │ Whisper EN → translate EN→ES → Piper ES
+                              │ Whisper EN → translate EN→ES → Kokoro ES
                               ▼
                       Caller hears Spanish
 ```
@@ -190,7 +190,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 The wizard will:
 - Prompt for business name, timezone, hours, passwords, IP, extensions
 - Write `agent/.env`, `ari.conf`, and `pjsip.conf` automatically
-- Optionally install Piper TTS voice models and pull the Ollama model
+- Installs Kokoro TTS and all dependencies; detects and reuses existing Ollama
 - Guide you through Google Calendar OAuth
 - Validate that all services are reachable
 
@@ -217,16 +217,14 @@ bash scripts/firewall.sh YOUR_LAN_SUBNET   # e.g. 192.168.1.0/24
 ```bash
 # 1. System dependencies
 sudo apt-get update
-sudo apt-get install -y asterisk python3.11 python3.11-venv python3-pip espeak-ng ffmpeg
+sudo apt-get install -y asterisk python3.11 python3.11-venv python3-pip espeak-ng libespeak-ng-dev ffmpeg
 
 # 2. Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.1:8b
 
-# 3. Install Piper TTS
-# Download the piper binary from https://github.com/rhasspy/piper/releases
-# Extract to /usr/local/bin/piper and mkdir -p /opt/piper/models
-# Then run the onboarding wizard — it will download voice models for you
+# 3. Install Kokoro TTS (via pip — model weights download automatically on first use)
+#    Run the onboarding wizard — it installs everything for you:
 bash scripts/onboard.sh
 
 # 4. Copy Asterisk config files
@@ -302,13 +300,15 @@ cp agent/.env.example agent/.env
 | `WHISPER_MODEL_MULTILINGUAL` | `base` | Multilingual model — must not be a `.en` variant |
 | `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu` |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Model for intent, conversation, translation |
-| `PIPER_MODEL` | `en_US-lessac-medium` | English TTS voice |
-| `PIPER_MODEL_ES` | `es_MX-claude-high` | Spanish TTS voice |
-| `PIPER_MODEL_FR` | `fr_FR-siwis-medium` | French TTS voice |
-| `PIPER_MODEL_IT` | `it_IT-paola-medium` | Italian TTS voice |
-| `PIPER_MODEL_DE` | `de_DE-thorsten-medium` | German TTS voice |
-| `PIPER_MODEL_RO` | `ro_RO-mihai-medium` | Romanian TTS voice |
-| `PIPER_MODEL_HE` | _(espeak-ng fallback)_ | Hebrew TTS (no Piper model available) |
+| `KOKORO_VOICE_EN` | `af_heart` | Kokoro voice — English |
+| `KOKORO_VOICE_ES` | `ef_dora` | Kokoro voice — Spanish |
+| `KOKORO_VOICE_FR` | `ff_siwis` | Kokoro voice — French |
+| `KOKORO_VOICE_IT` | `if_sara` | Kokoro voice — Italian |
+| _(DE/RO/HE)_ | _(espeak-ng)_ | espeak-ng handles DE, RO, HE automatically |
+| `KOKORO_VOICE_EN` | `af_heart` | Kokoro voice for English |
+| `KOKORO_VOICE_ES` | `ef_dora` | Kokoro voice for Spanish |
+| `KOKORO_VOICE_FR` | `ff_siwis` | Kokoro voice for French |
+| `KOKORO_VOICE_IT` | `if_sara` | Kokoro voice for Italian |
 | `AUTO_DETECT_LANGUAGE` | `true` | Auto-detect caller language via Whisper |
 
 #### Business hours & after-hours
@@ -452,7 +452,7 @@ helix-ai-virtual-receptionist/
 │   ├── stt/
 │   │   └── whisper_engine.py    faster-whisper STT, returns text + detected language
 │   ├── tts/
-│   │   └── piper_engine.py      Piper TTS, 7-language dispatch + espeak-ng Hebrew fallback
+│   │   └── kokoro_engine.py     Kokoro TTS (EN/ES/FR/IT) + espeak-ng (DE/RO/HE)
 │   ├── llm/
 │   │   ├── intent_engine.py     Ollama intent detection, FAQ loader, call summary
 │   │   └── translate_engine.py  EN ↔ ES translation via Ollama (local)
@@ -509,7 +509,7 @@ helix-ai-virtual-receptionist/
 |---|---|---|
 | STT | faster-whisper base (multilingual) | ~150 MB |
 | LLM | llama3.1:8b | ~5 GB |
-| TTS | Piper TTS (runs on CPU — no GPU needed) | 0 |
+| TTS | Kokoro TTS (runs on CPU — no GPU needed) | 0 |
 | **Total** | | **~5.2 GB** |
 
 RTX 4090 (24 GB) handles everything with room to spare. RTX 3080 (10 GB) works fine.  
@@ -527,7 +527,7 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | Speech-to-text | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (multilingual, GPU) |
 | Voice activity | [Silero VAD](https://github.com/snakers4/silero-vad) |
 | LLM | [Ollama](https://ollama.com/) — `llama3.1:8b` (local, no cloud) |
-| Text-to-speech | [Piper TTS](https://github.com/rhasspy/piper) — 6-language neural voices (EN/ES/FR/IT/DE/RO) + espeak-ng for Hebrew |
+| Text-to-speech | [Kokoro TTS](https://github.com/hexgrad/kokoro) — 82M parameter neural voices (EN/ES/FR/IT) + espeak-ng for DE/RO/HE |
 | Scheduling | Google Calendar API (OAuth2) |
 | Database | SQLite + SQLAlchemy async |
 | API | FastAPI |
@@ -544,7 +544,7 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.0 | Asterisk PBX + ARI WebSocket integration |
 | v1.0 | Whisper STT + Silero VAD |
 | v1.0 | Ollama LLM (llama3.1:8b) intent detection + conversation |
-| v1.0 | Piper TTS — neural voice synthesis |
+| v1.0 | Neural TTS voice synthesis |
 | v1.0 | Google Calendar scheduling (OAuth2) |
 | v1.0 | SQLite call log + routing rules |
 | v1.0 | React dashboard (calls, routing, appointments) |
@@ -567,8 +567,11 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.3 | Interactive onboarding wizard — `scripts/onboard-windows.ps1` (Windows) |
 | v1.3 | Wizard writes `.env`, `ari.conf`, `pjsip.conf` automatically |
 | v1.4 | 7-language support: EN, ES, FR, IT, DE, RO, HE |
-| v1.4 | Piper TTS voices for FR / IT / DE / RO |
-| v1.4 | espeak-ng fallback for Hebrew (no Piper voice available) |
+| v1.4 | Multilingual TTS voices for FR / IT / DE / RO |
+| v1.4 | espeak-ng fallback for Hebrew |
+| v1.6 | Kokoro TTS (82M parameter neural model) replaces Piper TTS |
+| v1.6 | onboard.sh is now a full system installer (Docker + native) |
+| v1.6 | Automatic Ollama detection — reuses existing local instance |
 | v1.4 | All prompts, greetings, after-hours messages, DTMF menus localized in 7 languages |
 
 ---
@@ -583,5 +586,5 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 - [ ] **PostgreSQL support** — drop-in swap from SQLite for production-scale deployments
 - [ ] **Dashboard Voicemails page** — in-browser playback + transcript view
 - [ ] **GitHub Releases** — formal release pages with changelogs for v1.2 / v1.3 / v1.4
-- [ ] **Additional languages** — Portuguese (PT), Polish (PL), Arabic (AR) when Piper voices become available
+- [ ] **Additional languages** — Portuguese (PT), Polish (PL), Arabic (AR) when Kokoro adds support
 - [ ] **Web-based onboarding** — browser UI equivalent of the onboarding wizard

@@ -18,7 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libsndfile1 \
     espeak-ng \
+    libespeak-ng-dev \
     && rm -rf /var/lib/apt/lists/*
+# Note: libespeak-ng-dev is required by Kokoro's misaki phonemizer for
+# out-of-dictionary (OOD) fallback. espeak-ng is also the TTS engine for
+# languages without native Kokoro support (DE, RO, HE).
 
 # Set python3.12 as default
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
@@ -27,50 +31,9 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 &
 # Install pip for Python 3.12
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 
-# Install Piper TTS binary
-RUN wget -q https://github.com/rhasspy/piper/releases/latest/download/piper_linux_x86_64.tar.gz \
-    -O /tmp/piper.tar.gz && \
-    tar -xzf /tmp/piper.tar.gz -C /usr/local/bin/ && \
-    rm /tmp/piper.tar.gz
-
-# Create Piper model directory and download default voice
-RUN mkdir -p /opt/piper/models && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx \
-    -O /opt/piper/models/en_US-lessac-medium.onnx && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json \
-    -O /opt/piper/models/en_US-lessac-medium.onnx.json && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx \
-    -O /opt/piper/models/es_MX-claude-high.onnx && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json \
-    -O /opt/piper/models/es_MX-claude-high.onnx.json && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx \
-    -O /opt/piper/models/fr_FR-siwis-medium.onnx && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json \
-    -O /opt/piper/models/fr_FR-siwis-medium.onnx.json && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/it/it_IT/paola/medium/it_IT-paola-medium.onnx \
-    -O /opt/piper/models/it_IT-paola-medium.onnx && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/it/it_IT/paola/medium/it_IT-paola-medium.onnx.json \
-    -O /opt/piper/models/it_IT-paola-medium.onnx.json && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx \
-    -O /opt/piper/models/de_DE-thorsten-medium.onnx && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json \
-    -O /opt/piper/models/de_DE-thorsten-medium.onnx.json && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx \
-    -O /opt/piper/models/ro_RO-mihai-medium.onnx && \
-    wget -q \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx.json \
-    -O /opt/piper/models/ro_RO-mihai-medium.onnx.json
+# Kokoro TTS is installed via pip (see requirements.txt).
+# Kokoro model weights are downloaded automatically from Hugging Face on first use
+# (cached in ~/.cache/huggingface/hub). No manual binary or model file management needed.
 
 WORKDIR /app
 

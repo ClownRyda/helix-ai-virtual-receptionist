@@ -39,16 +39,15 @@ class Settings(BaseSettings):
     ollama_model: str = Field("llama3.1:8b", env="OLLAMA_MODEL")
     ollama_timeout: int = Field(30, env="OLLAMA_TIMEOUT")
 
-    # ── Piper TTS ───────────────────────────────────────────────
-    piper_model: str = Field("en_US-lessac-medium", env="PIPER_MODEL")
-    piper_model_es: str = Field("es_MX-claude-high", env="PIPER_MODEL_ES")
-    piper_model_fr: str = Field("fr_FR-siwis-medium", env="PIPER_MODEL_FR")
-    piper_model_it: str = Field("it_IT-paola-medium", env="PIPER_MODEL_IT")
-    piper_model_de: str = Field("de_DE-thorsten-medium", env="PIPER_MODEL_DE")
-    piper_model_ro: str = Field("ro_RO-mihai-medium", env="PIPER_MODEL_RO")
-    # Hebrew: no Piper voice available — espeak-ng is used as fallback
-    piper_model_he: str = Field("", env="PIPER_MODEL_HE")
-    piper_model_path: str = Field("/opt/piper/models", env="PIPER_MODEL_PATH")
+    # ── Kokoro TTS ───────────────────────────────────────────────
+    # Voice overrides per language (leave blank to use built-in defaults).
+    # Full voice list: https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md
+    # Kokoro supports: EN (a/b), ES (e), FR (f), IT (i)
+    # DE, RO, HE fall back to espeak-ng automatically (no Kokoro support)
+    kokoro_voice_en: str = Field("af_heart", env="KOKORO_VOICE_EN")
+    kokoro_voice_es: str = Field("ef_dora", env="KOKORO_VOICE_ES")
+    kokoro_voice_fr: str = Field("ff_siwis", env="KOKORO_VOICE_FR")
+    kokoro_voice_it: str = Field("if_sara", env="KOKORO_VOICE_IT")
 
     # ── Multilingual / translation ───────────────────────────────
     supported_languages: str = Field("en,es,fr,it,de,ro,he", env="SUPPORTED_LANGUAGES")

@@ -4,7 +4,76 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.5
+## [latest] → v1.6
+
+---
+
+## [v1.6] — 2026-04-16
+
+### Summary
+Two major improvements shipped together: the onboarding script is now a full system
+installer (no more manual dependency hunting), and Piper TTS is replaced with Kokoro,
+a significantly higher quality 82M-parameter neural TTS model.
+
+### Added
+
+**Full system installer in `scripts/onboard.sh`**
+- Script now installs all dependencies from scratch — no separate install guide needed
+- Step 1 asks: Docker or native Linux install?
+- **Docker path**: installs Docker Engine (if missing), Docker Compose plugin, confirms
+  Python for helper scripts
+- **Native path**: installs `asterisk`, `python3.11`, `python3.11-venv`, `espeak-ng`,
+  `libespeak-ng-dev`, `ffmpeg`, `build-essential` via apt-get; creates and populates
+  agent virtualenv; pre-downloads Kokoro model weights; copies Asterisk config files;
+  reloads Asterisk live
+- **Ollama auto-detection**: probes `localhost:11434` before asking anything. If Ollama
+  is already running, it is used directly (no reinstall). If not found, offers:
+  (1) install locally, (2) use a remote Ollama URL, (3) skip and configure manually
+- Firewall rules added automatically (UFW or firewalld detected, LAN ports opened)
+- Validation section at the end checks Ollama, espeak-ng, Kokoro import, Asterisk,
+  and Docker status; prints pass/warn for each
+- Final summary shows all config values and exact next-step commands
+- macOS support for native mode (Homebrew)
+
+**Kokoro TTS replaces Piper TTS**
+- `agent/tts/kokoro_engine.py` — new TTS engine using Kokoro 82M parameter model
+  (`pip install kokoro>=0.9.2 misaki[en]`)
+- Kokoro outputs float32 at 24 kHz; engine resamples to 16 kHz PCM16 for Asterisk
+  slin16 RTP. `scipy.signal.resample_poly` used for high-quality resampling.
+- Pipelines are lazily loaded per language and cached in-process (no reload overhead
+  between calls)
+- Audio split on sentence boundaries (`split_pattern=r'[.!?]+'`) then concatenated
+  for natural prosody across long utterances
+- Language routing:
+  - EN → `KPipeline(lang_code='a')` voice `af_heart`
+  - ES → `KPipeline(lang_code='e')` voice `ef_dora`
+  - FR → `KPipeline(lang_code='f')` voice `ff_siwis`
+  - IT → `KPipeline(lang_code='i')` voice `if_sara`
+  - DE / RO / HE → espeak-ng (Kokoro has no native support for these)
+- espeak-ng path now uses Python `wave` module to parse the WAV header properly
+  (fixes the v1.4 medium bug: hardcoded 44-byte header strip)
+- Voice overrides per language via `KOKORO_VOICE_EN`, `KOKORO_VOICE_ES`, etc. in `.env`
+- `agent/tts/piper_engine.py` retained in repo for reference but no longer imported
+
+### Changed
+- `agent/config.py` — Piper config vars replaced with Kokoro vars (`KOKORO_VOICE_*`)
+- `agent/.env.example` — Piper section replaced with Kokoro section
+- `agent/requirements.txt` — `piper-tts` replaced with `kokoro>=0.9.2` + `misaki[en]`
+- `agent/ari_agent.py` — import changed from `piper_engine` to `kokoro_engine`
+- `docker/Dockerfile.agent` — Piper binary install + 12-model-file downloads removed;
+  replaced with single comment (Kokoro downloads automatically from HF); added
+  `libespeak-ng-dev` for Kokoro misaki OOD phoneme fallback
+- `docker/Dockerfile.agent.windows` — same Piper removal; same Kokoro note
+- `scripts/onboard-windows.ps1` — updated voice model notes; TTS engine line in
+  summary updated
+- `README.md` — version badge v1.6; all Piper references updated to Kokoro;
+  architecture diagram, env vars table, Quick Start native section, Roadmap all updated
+
+### Removed
+- All Piper binary download steps from Dockerfiles
+- All 12 Piper `.onnx` / `.onnx.json` model download `RUN` commands from Dockerfiles
+  (was ~60 lines of wget; replaced with one comment line)
+- `PIPER_MODEL`, `PIPER_MODEL_ES/FR/IT/DE/RO/HE`, `PIPER_MODEL_PATH` config vars
 
 ---
 

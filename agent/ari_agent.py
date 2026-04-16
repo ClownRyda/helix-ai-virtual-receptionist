@@ -6,7 +6,7 @@ Flow:
   2. Raw slin16 RTP flows bidirectionally between Asterisk and our UDP socket
   3. We buffer audio, run Silero VAD for speech detection, send chunks to Whisper
   4. Transcript → Ollama intent detection
-  5. Ollama generates spoken response → Piper TTS → RTP back to caller
+  5. Ollama generates spoken response → Kokoro TTS → RTP back to caller
   6. Based on intent:
      - "schedule" → query Google Calendar, offer slots, book appointment
      - "transfer" → look up routing rules, redirect call via ARI
@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from stt.whisper_engine import transcribe_pcm
-from tts.piper_engine import synthesize_pcm
+from tts.kokoro_engine import synthesize_pcm
 from llm.intent_engine import (
     detect_intent, generate_response, generate_call_summary, ConversationState
 )

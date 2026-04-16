@@ -307,9 +307,9 @@ Header "Step 7 of 7 — Launch & Validate"
 
 # ── Voice model note for Windows users ──────────────────────────────────────
 Write-Host ""
-Info "Voice models (Piper TTS) are downloaded automatically when the Docker containers start."
-Info "Supported voices: English, Spanish, French, Italian, German, Romanian."
-Info "Hebrew uses espeak-ng (pre-installed in the Docker image)."
+Info "Kokoro TTS model weights download automatically from Hugging Face on first use."
+Info "Kokoro natively supports: English, Spanish, French, Italian."
+Info "German, Romanian, and Hebrew use espeak-ng (pre-installed in the Docker image)."
 Write-Host ""
 
 $LaunchNow = Prompt-YN "Start Helix AI now with Docker Compose?" "y"
@@ -379,7 +379,8 @@ Write-Host "  Business hours:    " -NoNewline; Write-Host "${HoursStart}:00 – 
 Write-Host "  After-hours mode:  " -NoNewline; Write-Host $AfterHoursMode   -ForegroundColor Cyan
 Write-Host "  Server IP:         " -NoNewline; Write-Host $ServerIP         -ForegroundColor Cyan
 Write-Host "  LAN subnet:        " -NoNewline; Write-Host $LanSubnet        -ForegroundColor Cyan
-Write-Host "  Whisper device:    " -NoNewline; Write-Host "cpu (int8)"      -ForegroundColor Cyan
+Write-Host "  Whisper device:    " -NoNewline; Write-Host "cpu (int8)"       -ForegroundColor Cyan
+Write-Host "  TTS engine:        " -NoNewline; Write-Host "Kokoro (EN/ES/FR/IT) + espeak-ng (DE/RO/HE)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Files written:"
 Write-Host "    [✓] agent\.env"                                               -ForegroundColor Green
