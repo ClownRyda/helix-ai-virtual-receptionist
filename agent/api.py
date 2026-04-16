@@ -19,7 +19,7 @@ import re
 
 from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, get_db
 from routing.router import get_all_rules, upsert_rule
-from calendar.gcal import get_available_slots
+from gcal.gcal import get_available_slots
 from config import settings
 
 app = FastAPI(title="Helix AI API", version="1.2.0")

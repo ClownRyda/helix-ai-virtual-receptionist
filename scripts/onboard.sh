@@ -34,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6.5"
+HELIX_VERSION="v1.6.7"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -705,6 +705,13 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
         section "Copying repo to $INSTALL_PATH"
         if [[ "$(realpath "$REPO_ROOT")" != "$INSTALL_PATH" ]]; then
             sudo mkdir -p "$INSTALL_PATH"
+            # Remove stale agent/calendar/ if source now ships agent/gcal/.
+            # rsync does not delete old target directories by default, so without
+            # this step the old package survives and shadows Python's stdlib calendar.
+            if [[ -d "$REPO_ROOT/agent/gcal" ]] && [[ -d "$INSTALL_PATH/agent/calendar" ]]; then
+                warn "Removing stale $INSTALL_PATH/agent/calendar/ (shadowed stdlib — replaced by gcal/)"
+                sudo rm -rf "$INSTALL_PATH/agent/calendar"
+            fi
             sudo rsync -a --exclude=".git" --exclude="agent/.venv" "$REPO_ROOT/" "$INSTALL_PATH/"
             if [[ -d "$AGENT_VENV" ]]; then
                 sudo cp -r "$AGENT_VENV" "$INSTALL_PATH/agent/.venv"
@@ -763,6 +770,27 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
         fi
 
         section "Installing systemd units"
+        # Pre-flight: check if the default dashboard port (3000) is already bound.
+        # If it is, prompt for an alternate port and patch the service + nginx config.
+        DASHBOARD_PORT=3000
+        if ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE ":(${DASHBOARD_PORT})$"; then
+            warn "Port ${DASHBOARD_PORT} is already in use on this host."
+            read -rp "  Enter alternate dashboard port [default: 3001]: " ALT_PORT
+            DASHBOARD_PORT="${ALT_PORT:-3001}"
+            log "Dashboard will use port $DASHBOARD_PORT."
+            # Patch the dashboard service file in the install path
+            if [[ -f "$INSTALL_PATH/systemd/helix-dashboard.service" ]]; then
+                sudo sed -i "s/PORT=3000/PORT=${DASHBOARD_PORT}/g" \
+                    "$INSTALL_PATH/systemd/helix-dashboard.service"
+                log "Patched helix-dashboard.service: PORT=${DASHBOARD_PORT}"
+            fi
+            # Patch nginx config to point to the alternate port
+            if [[ -f "$INSTALL_PATH/deploy/nginx-helix.conf" ]]; then
+                sudo sed -i "s/127\.0\.0\.1:3000/127.0.0.1:${DASHBOARD_PORT}/g" \
+                    "$INSTALL_PATH/deploy/nginx-helix.conf"
+                log "Patched nginx-helix.conf: dashboard upstream → 127.0.0.1:${DASHBOARD_PORT}"
+            fi
+        fi
         SYSTEMD_SRC="$INSTALL_PATH/systemd"
         if [[ -d "$SYSTEMD_SRC" ]]; then
             for unit in helix-agent.service helix-dashboard.service; do

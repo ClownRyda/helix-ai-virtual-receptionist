@@ -38,7 +38,7 @@ from llm.intent_engine import (
     detect_intent, generate_response, generate_call_summary, ConversationState
 )
 from llm.translate_engine import ensure_english
-from calendar.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
+from gcal.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
 from routing.router import get_route_for_intent, get_vip_route, get_after_hours_route
 from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage
 from vad import SileroVADEngine

@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.6.6-cyan)
+![Version](https://img.shields.io/badge/version-v1.6.7-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -592,9 +592,13 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.6.4 | onboard.sh: dashboard npm ci + npm run build added before systemd enable |
 | v1.6.4 | nginx: $connection_upgrade map extracted to deploy/nginx-helix-map.conf (nginx -t fix) |
 | v1.6.4 | onboard.sh installs nginx-helix-map.conf to conf.d/ before nginx config test |
-| v1.6.6 | dashboard/package-lock.json committed — npm ci now works on fresh clones |
-| v1.6.6 | onboard.sh: npm ci with lockfile fallback to npm install if lockfile absent |
-| v1.6.6 | onboard.sh: VOICEMAIL_ENABLED=true auto-set when after-hours mode is voicemail |
+| v1.6.5 | dashboard/package-lock.json committed — npm ci now works on fresh clones |
+| v1.6.5 | onboard.sh: npm ci with lockfile fallback to npm install if lockfile absent |
+| v1.6.5 | onboard.sh: VOICEMAIL_ENABLED=true auto-set when after-hours mode is voicemail |
+| v1.6.6 | agent/config.py: api_cors_origins field added — pydantic crash on startup fixed |
+| v1.6.7 | agent/calendar/ renamed to agent/gcal/ — Python stdlib shadowing bug fixed |
+| v1.6.7 | onboard.sh: removes stale agent/calendar/ before rsync so shadow cannot survive upgrades |
+| v1.6.7 | onboard.sh: pre-flight port check — detects port 3000 conflict and prompts for alternate |
 
 ---
 

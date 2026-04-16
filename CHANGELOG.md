@@ -4,7 +4,50 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.6.6
+## [latest] → v1.6.7
+
+---
+
+## [v1.6.7] — 2026-04-16
+
+### Summary
+Fixes a Python stdlib shadowing bug that crashes the agent on all bare-metal
+installs once the Google Calendar code path is reached, adds stale-directory
+cleanup to the installer so the old `calendar/` package can never survive an
+upgrade rsync, and adds a pre-flight port check so dashboard port conflicts
+are caught and resolved before deployment.
+
+### Fixed
+
+**`agent/calendar/` → `agent/gcal/` — stdlib shadowing (affects all installs)**
+- The agent shipped a package directory named `calendar/` inside `agent/`.
+  Python resolves local packages before stdlib, so any `import calendar` by
+  the agent or its dependencies loaded the app package instead of the stdlib
+  module, causing `AttributeError` or `ImportError` failures whenever a
+  Google Calendar operation was attempted.
+- Fix: renamed `agent/calendar/` → `agent/gcal/`.
+- Updated all imports: `from calendar.gcal import …` → `from gcal.gcal import …`
+  in `agent/api.py` and `agent/ari_agent.py`.
+
+**`scripts/onboard.sh` — stale `calendar/` package survives upgrade rsync**
+- `rsync` without `--delete` preserves directories that exist in the target
+  but not in the source. A previous install's `agent/calendar/` would survive
+  an in-place upgrade and continue shadowing the stdlib even after the rename
+  landed in the repo.
+- Fix: before rsync, `onboard.sh` now removes `$INSTALL_PATH/agent/calendar/`
+  when the source tree contains `agent/gcal/`.
+
+### Added
+
+**`scripts/onboard.sh` — pre-flight dashboard port check**
+- If port 3000 is already bound on the host when the systemd units are being
+  installed, the installer detects this, warns the user, and prompts for an
+  alternate port (default: 3001).
+- It then patches `helix-dashboard.service` (`PORT=3000` → alternate) and
+  `nginx-helix.conf` (upstream `127.0.0.1:3000` → alternate) before writing
+  the units to `/etc/systemd/system/`.
+- Eliminates the silent 502 / bind failure that occurs when another service
+  (e.g. a dev server) already occupies port 3000.
 
 ---
 
