@@ -4,7 +4,62 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.4.1
+## [latest] → v1.5
+
+---
+
+## [v1.5] — 2026-04-16
+
+### Summary
+Bug-fix release targeting four regressions introduced in v1.4 that together broke the
+multilingual experience for every FR/IT/DE/RO/HE caller on every call.
+
+### Fixed
+
+**Bug 1 (Critical) — `agent/llm/intent_engine.py`**
+- `lang_names` dict only mapped `"en"` and `"es"`. For the 5 new languages added in
+  v1.4, the LLM received a raw 2-letter code (`"fr"`, `"it"`, etc.) in the
+  `BILINGUAL_ADDENDUM` system prompt instead of the full language name. LLM compliance
+  with raw codes is unreliable — it would often respond in English or mix languages.
+- Fix: extended `lang_names` to cover all 7 supported languages (`en`, `es`, `fr`, `it`,
+  `de`, `ro`, `he`), mirroring the `LANG_NAMES` dict already present in
+  `translate_engine.py`.
+
+**Bug 2 (Critical) — `agent/ari_agent.py` — after-hours always English**
+- `_handle_after_hours()` is called before `_greet()`, meaning `caller_lang` is always
+  `"en"` at that point (language detection runs inside `_greet()`). All 7-language
+  after-hours message dicts existed but were unreachable — every after-hours caller
+  heard English regardless of their language.
+- Fix: added `_after_hours_closed_msgs_all_langs()` helper that returns the closed
+  message in all 7 languages as a list of `(lang, text)` tuples. `_handle_after_hours()`
+  now iterates and speaks each language sequentially before branching on mode, so every
+  caller hears the announcement in their own language.
+
+**Bug 3 (High) — `agent/ari_agent.py` — schedule confirmation EN/ES only**
+- After booking a callback appointment, the confirmation message used
+  `if lang == "es": ... else: English`. FR/IT/DE/RO/HE callers heard English at the
+  most critical moment of the scheduling flow.
+- Fix: replaced the two-branch conditional with a 7-language dict
+  (`_schedule_confirm`). Confirmation now speaks in the caller's detected language.
+
+**Bug 4 (High) — `agent/ari_agent.py` — transfer message EN/ES only**
+- "Let me transfer you" message used `if lang == "es": ... else: English`. Same
+  two-branch pattern affected all 5 new v1.4 languages.
+- Fix: replaced with `_transfer_msgs` 7-language dict.
+
+**Bug 5 (High) — `agent/ari_agent.py` — farewell detection EN/ES only**
+- `farewell_words` contained only English and Spanish goodbye words. Callers who said
+  "au revoir", "auf Wiedersehen", "arrivederci", "la revedere", or "shalom" did not
+  trigger a graceful farewell — the loop ran to `max_turns` and ended abruptly with no
+  closing message.
+- Fix: extended `farewell_words` with common goodbye phrases for all 7 languages.
+  Farewell response message also converted to a 7-language dict (`_farewell_msgs`) so
+  the closing line plays in the caller's language.
+
+### Files changed
+- `agent/llm/intent_engine.py` — `lang_names` extended to 7 languages
+- `agent/ari_agent.py` — after-hours multilingual broadcast, schedule confirmation
+  dict, transfer message dict, farewell detection + response dict
 
 ---
 

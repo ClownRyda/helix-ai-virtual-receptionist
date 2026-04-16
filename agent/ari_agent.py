@@ -378,7 +378,7 @@ class CallHandler:
     # ── Localized message helpers ─────────────────────────────────────────────
 
     def _after_hours_closed_msg(self, lang: str) -> str:
-        """Return after-hours closed message in the caller's language."""
+        """Return after-hours closed message in a single language."""
         start_h = settings.business_hours_start
         end_h   = settings.business_hours_end
         pm_end  = end_h - 12 if end_h > 12 else end_h
@@ -408,15 +408,37 @@ class CallHandler:
         }
         return msgs.get(lang, msgs["en"])
 
+    def _after_hours_closed_msgs_all_langs(self) -> list[tuple[str, str]]:
+        """
+        Return the closed message in all 7 supported languages as a list of
+        (lang_code, message) tuples.
+
+        Used when the caller's language is not yet known (before _greet() runs)
+        so every caller hears the announcement in their own language regardless
+        of call-flow ordering.
+        """
+        return [
+            (lang, self._after_hours_closed_msg(lang))
+            for lang in ("en", "es", "fr", "it", "de", "ro", "he")
+        ]
+
     async def _handle_after_hours(self):
         """
         Called when the business is closed.
-        Speaks a closed message in the caller's language, then branches on AFTER_HOURS_MODE.
+        Speaks a closed message in ALL 7 supported languages sequentially (multilingual
+        announcement) because language detection has not yet run at this point in the
+        call flow. Every caller hears the announcement in their own language.
+        Then branches on AFTER_HOURS_MODE.
         """
         mode = settings.after_hours_mode
-        lang = self.state.caller_lang  # may be "en" if not yet detected
+        lang = self.state.caller_lang  # always "en" here — detection runs in _greet()
 
-        base_msg = self._after_hours_closed_msg(lang)
+        # Play closed message in every supported language so all callers are informed.
+        for msg_lang, msg_text in self._after_hours_closed_msgs_all_langs():
+            await self._speak(msg_text, language=msg_lang)
+
+        # mode-specific append plays in English (supplementary instruction)
+        base_msg = ""  # base already spoken above; append carries the action prompt
 
         append = {
             "emergency": {
@@ -876,13 +898,23 @@ class CallHandler:
                         reason=self.state.reason or "",
                         call_id=self.call_id,
                     )
-                    confirm = (
-                        f"Perfecto. He programado su llamada para {chosen_slot['label']}. "
-                        f"Le llamaremos al {self.state.caller_phone}. ¿Hay algo más en lo que pueda ayudarle?"
-                        if lang == "es"
-                        else f"Perfect! I've scheduled your callback for {chosen_slot['label']}. "
-                             f"We'll call you at {self.state.caller_phone}. Is there anything else?"
-                    )
+                    _schedule_confirm = {
+                        "en": (f"Perfect. I've scheduled your callback for {chosen_slot['label']}. "
+                               f"We'll call you at {self.state.caller_phone}. Is there anything else?"),
+                        "es": (f"Perfecto. He programado su llamada para {chosen_slot['label']}. "
+                               f"Le llamaremos al {self.state.caller_phone}. ¿Hay algo más en lo que pueda ayudarle?"),
+                        "fr": (f"Parfait. J'ai planifié votre rappel pour {chosen_slot['label']}. "
+                               f"Nous vous appellerons au {self.state.caller_phone}. Y a-t-il autre chose?"),
+                        "it": (f"Perfetto. Ho programmato il suo richiamo per {chosen_slot['label']}. "
+                               f"La chiameremo al {self.state.caller_phone}. C'è altro che posso fare?"),
+                        "de": (f"Perfekt. Ich habe Ihren Rückruf für {chosen_slot['label']} geplant. "
+                               f"Wir rufen Sie unter {self.state.caller_phone} an. Kann ich noch etwas für Sie tun?"),
+                        "ro": (f"Perfect. Am programat apelul dvs. înapoi pentru {chosen_slot['label']}. "
+                               f"Vă vom suna la {self.state.caller_phone}. Mai pot ajuta cu ceva?"),
+                        "he": (f"מצוין. תזמנתי את ההתקשרות שלך בחזרה ל-{chosen_slot['label']}. "
+                               f"נתקשר אליך ל-{self.state.caller_phone}. האם יש עוד משהו?"),
+                    }
+                    confirm = _schedule_confirm.get(lang, _schedule_confirm["en"])
                     await self._speak(confirm, language=lang)
                     await self._save_call(disposition="scheduled", appointment_id=event_id)
                     self.call_path.record("scheduled", slot=chosen_slot["label"])
@@ -909,11 +941,16 @@ class CallHandler:
                 )
 
                 dept_name = self.state.department or "the right person"
-                transfer_msg = (
-                    f"Por supuesto. Le voy a comunicar con {dept_name} ahora mismo. Por favor espere."
-                    if lang == "es"
-                    else f"Of course! Let me transfer you to {dept_name} right now. Please hold."
-                )
+                _transfer_msgs = {
+                    "en": f"Of course. Let me transfer you to {dept_name} right now. Please hold.",
+                    "es": f"Por supuesto. Le voy a comunicar con {dept_name} ahora mismo. Por favor espere.",
+                    "fr": f"Bien sûr. Je vous mets en relation avec {dept_name} maintenant. Veuillez patienter.",
+                    "it": f"Certo. La trasferisco a {dept_name} adesso. Un momento per favore.",
+                    "de": f"Natürlich. Ich verbinde Sie jetzt mit {dept_name}. Bitte warten Sie.",
+                    "ro": f"Desigur. Vă transfer către {dept_name} acum. Vă rog aşteptați.",
+                    "he": f"בוודאי. אני מעביר אותך ל-{dept_name} עכשיו. אנא המתן.",
+                }
+                transfer_msg = _transfer_msgs.get(lang, _transfer_msgs["en"])
                 await self._speak(transfer_msg, language=lang)
                 await asyncio.sleep(1)
 
@@ -953,15 +990,34 @@ class CallHandler:
                 self.call_path.record("general_response", intent=intent, turn=self.state.turn_count)
                 await self._speak(response, language=lang)
 
-            # Natural farewell detection
-            farewell_words = ["goodbye", "bye", "thank you", "that's all",
-                              "adiós", "adios", "gracias", "hasta luego", "hasta pronto"]
+            # Natural farewell detection — all 7 supported languages
+            farewell_words = [
+                # English
+                "goodbye", "bye", "thank you", "thanks", "that's all", "that is all",
+                # Spanish
+                "adiós", "adios", "gracias", "hasta luego", "hasta pronto", "chao",
+                # French
+                "au revoir", "merci", "bonne journée", "c'est tout", "cest tout",
+                # Italian
+                "arrivederci", "grazie", "a presto", "ciao",
+                # German
+                "auf wiedersehen", "tschüss", "tschuss", "danke", "danke schön", "das war alles",
+                # Romanian
+                "la revedere", "mulțumesc", "multumesc", "pa pa",
+                # Hebrew
+                "shalom", "lehitraot", "toda", "zeh hakol",
+            ]
+            _farewell_msgs = {
+                "en": "Thank you for calling. Have a great day!",
+                "es": "¡Gracias por llamar. Que tenga un buen día!",
+                "fr": "Merci d'avoir appelé. Bonne journée!",
+                "it": "Grazie per aver chiamato. Buona giornata!",
+                "de": "Danke für Ihren Anruf. Auf Wiedersehen!",
+                "ro": "Vă mulțumim că ați sunat. O zi bună!",
+                "he": "תודה שהתקשרת. יום טוב!",
+            }
             if any(word in utterance.lower() for word in farewell_words):
-                farewell = (
-                    "¡Gracias por llamar. Que tenga un buen día!"
-                    if lang == "es"
-                    else "Thank you for calling. Have a great day!"
-                )
+                farewell = _farewell_msgs.get(lang, _farewell_msgs["en"])
                 await self._speak(farewell, language=lang)
                 self.call_path.record("farewell")
                 break

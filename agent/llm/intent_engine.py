@@ -196,7 +196,15 @@ async def generate_response(transcript: str, state: ConversationState, context: 
     Returns:
         Text response to speak to the caller.
     """
-    lang_names = {"en": "English", "es": "Spanish"}
+    lang_names = {
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "it": "Italian",
+        "de": "German",
+        "ro": "Romanian",
+        "he": "Hebrew",
+    }
     response_lang = lang_names.get(state.caller_lang, "English")
 
     system = CONVERSATION_SYSTEM_PROMPT.format(
