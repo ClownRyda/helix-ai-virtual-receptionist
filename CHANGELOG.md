@@ -4,7 +4,26 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.6.5
+## [latest] → v1.6.6
+
+---
+
+## [v1.6.6] — 2026-04-16
+
+### Summary
+Fixes a startup crash introduced when `API_CORS_ORIGINS` is present in `.env`.
+The key was used in `api.py` via `os.environ` but never declared in the pydantic
+`Settings` model, causing a `ValidationError: Extra inputs are not permitted` on
+every agent boot.
+
+### Fixed
+
+**`agent/config.py` — `api_cors_origins` missing from `Settings` model**
+- `pydantic_settings` rejects any `.env` key not declared in the `Settings` class.
+  `API_CORS_ORIGINS` was already written by `onboard.sh` and consumed by `api.py`,
+  but the missing field declaration caused a hard crash at import time.
+- Fix: added `api_cors_origins: str` field with default
+  `"http://127.0.0.1,http://localhost"` matching what the installer writes.
 
 ---
 
