@@ -31,6 +31,9 @@ warn() { echo -e "${YELLOW}[PBX]${NC} $*"; }
 err()  { echo -e "${RED}[PBX]${NC} $*" >&2; }
 
 # ── Handle flags ──────────────────────────────────────────────
+# Note: COMPOSE_FILE points to the docker-compose.yml symlink in the repo
+# root which resolves to docker/docker-compose.yml at runtime. This is
+# intentional — do not change to a hardcoded path.
 
 if [[ "${1:-}" == "--down" ]]; then
     log "Stopping all services..."
@@ -177,20 +180,25 @@ log "============================================"
 log "  All services started"
 log "============================================"
 echo ""
-echo -e "  ${CYAN}Dashboard:${NC}   http://${PUBLIC_HOST}:3000"
-echo -e "  ${CYAN}Agent API:${NC}   http://${PUBLIC_HOST}:8000"
-echo -e "  ${CYAN}ARI:${NC}         http://${PUBLIC_HOST}:8088"
-echo -e "  ${CYAN}Ollama:${NC}      http://${PUBLIC_HOST}:11434"
+echo -e "  ${CYAN}Dashboard:${NC}   http://${PUBLIC_HOST}/        (via nginx)"
+echo -e "  ${CYAN}Agent API:${NC}   http://${PUBLIC_HOST}/api/    (via nginx)"
+echo ""
+echo -e "  ${YELLOW}Internal (loopback only — do not expose):${NC}"
+echo -e "    Agent API direct: http://127.0.0.1:8000"
+echo -e "    Dashboard direct: http://127.0.0.1:3000"
+echo -e "    ARI:              http://127.0.0.1:8088  (agent-only)"
+echo -e "    Ollama:           http://127.0.0.1:11434 (agent-only)"
 echo ""
 echo -e "  ${CYAN}SIP Server:${NC}  ${PUBLIC_HOST}:5060/UDP"
 echo -e "  ${CYAN}Extensions:${NC}  1001 / 1002 / 1003"
 echo -e "  ${CYAN}AI Number:${NC}   ${GREEN}9999${NC}"
 echo ""
-log "Register a softphone (Zoiper) and dial 9999 to test the AI."
+log "Register a softphone (e.g. Zoiper) and dial 9999 to reach the AI."
 log "See docs/zoiper-setup.md for step-by-step instructions."
 echo ""
 log "Useful commands:"
 echo "  ./deploy.sh --logs    # Tail all logs"
 echo "  ./deploy.sh --down    # Stop everything"
-echo "  docker compose -f docker/docker-compose.yml logs agent -f   # Agent logs only"
+echo "  docker compose -f docker/docker-compose.yml logs agent -f   # Agent logs"
+echo "  docker compose -f docker/docker-compose.yml logs dashboard -f # Dashboard logs"
 echo "  docker exec -it pbx-asterisk asterisk -rvvv                 # Asterisk CLI"

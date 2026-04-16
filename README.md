@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.6.2-cyan)
+![Version](https://img.shields.io/badge/version-v1.6.3-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -584,6 +584,10 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.6.2 | `onboard.sh` Step 11: creates helix user, installs systemd units, nginx, locks .env |
 | v1.6.2 | Firewall fix: no longer opens ARI/API/dashboard ports (loopback-only, behind nginx) |
 | v1.6.2 | Native install next-steps updated to reference systemd + log tail commands |
+| v1.6.3 | Docker dashboard no longer exposes port 3000 to network (loopback + nginx) |
+| v1.6.3 | Dockerfile.asterisk + docker-compose RTP range fixed: 10000-19999 (no overlap) |
+| v1.6.3 | Dockerfile.agent: Python 3.12 → 3.11, Ubuntu 24.04 (matches native installer) |
+| v1.6.3 | deploy.sh no longer advertises ARI/Ollama as public URLs in post-start summary |
 
 ---
 

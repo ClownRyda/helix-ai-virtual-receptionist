@@ -16,7 +16,7 @@ RUN chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/spool/asteri
 EXPOSE 5060/udp
 EXPOSE 5060/tcp
 EXPOSE 8088/tcp
-EXPOSE 10000-20000/udp
+EXPOSE 10000-19999/udp
 
 USER asterisk
 CMD ["/usr/sbin/asterisk", "-f", "-vvv"]

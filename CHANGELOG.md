@@ -4,6 +4,41 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
+## [latest] → v1.6.3
+
+---
+
+## [v1.6.3] — 2026-04-16
+
+### Summary
+Docker path hardening — aligns the Docker compose stack with the v1.6.1 loopback
+security model, fixes an RTP port overlap in the Asterisk container, and aligns
+Python version between the agent Dockerfile and the native installer.
+
+### Fixed
+- `docker/docker-compose.yml` — dashboard service changed from `ports: ["3000:3000"]`
+  (world-exposed) to `network_mode: host` with `HOST=127.0.0.1`. Dashboard is now
+  loopback-only in Docker, consistent with native mode. nginx proxies to it.
+- `docker/docker-compose.yml` — `API_BASE_URL` env var corrected from
+  `http://localhost:8000` → `http://127.0.0.1:8000`
+- `docker/docker-compose.yml` — RTP comment range updated 10000-20000 → 10000-19999
+  to match the v1.6.1 rtp.conf fix (agent listener starts at 20000)
+- `docker/Dockerfile.asterisk` — `EXPOSE 10000-20000/udp` → `EXPOSE 10000-19999/udp`;
+  eliminates the port 20000 overlap with the agent RTP receiver
+- `docker/Dockerfile.agent` — Python 3.12 → Python 3.11; base image updated to
+  `ubuntu24.04`; aligns with `onboard.sh` native install (both now use Python 3.11)
+- `deploy.sh` — final summary no longer advertises ARI (8088) and Ollama (11434) as
+  public URLs. Internal services now listed under a clearly labelled
+  "Loopback only — do not expose" section. Public URLs now correctly show `/` and
+  `/api/` paths through nginx.
+- `deploy.sh` — added explanatory comment for `COMPOSE_FILE` symlink resolution
+
+### Changed
+- `docker/docker-compose.yml` — header comment rewritten to document public vs.
+  loopback-only port layout clearly
+
+---
+
 ## [latest] → v1.6.2
 
 ---

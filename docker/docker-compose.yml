@@ -1,20 +1,23 @@
 # ============================================================
-# PBX Assistant — Docker Compose (Dev / Testing)
+# Helix AI — Docker Compose
 # Host: Ubuntu server with a supported NVIDIA GPU
 # ============================================================
 #
 # All SIP/RTP-facing services use host networking to avoid
-# NAT headaches with Docker bridge networks. This is fine for
-# dev/testing — the final deployment will be native anyway.
+# NAT headaches with Docker bridge networks.
 #
-# Ports used on the host:
-#   5060/udp    — SIP signaling (Asterisk)
-#   8088/tcp    — ARI HTTP + WebSocket (Asterisk)
-#   8000/tcp    — Agent REST API (Python)
-#   3000/tcp    — Dashboard (Node.js)
-#   10000-20000 — Asterisk RTP
-#   20000-20100 — Agent RTP (ExternalMedia)
-#   11434/tcp   — Ollama LLM API
+# Port layout (host):
+#   5060/udp        — SIP signaling (Asterisk)       PUBLIC
+#   10000-19999/udp — Asterisk RTP media             PUBLIC
+#   20000-20100/udp — Agent RTP (ExternalMedia)      PUBLIC
+#   80/443/tcp      — nginx reverse proxy            PUBLIC
+#   8088/tcp        — ARI WebSocket (Asterisk)       LOOPBACK ONLY
+#   8000/tcp        — Agent REST API (Python)        LOOPBACK ONLY
+#   3000/tcp        — Dashboard (Node.js)            LOOPBACK ONLY
+#   11434/tcp       — Ollama LLM API                 LOOPBACK ONLY
+#
+# ARI, Agent API, Dashboard, and Ollama must never bind to
+# 0.0.0.0. All four are accessed exclusively via nginx proxy.
 # ============================================================
 
 services:
@@ -107,12 +110,15 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.dashboard
     container_name: pbx-dashboard
-    ports:
-      - "3000:3000"
+    # Bind to loopback only — nginx proxies / → 127.0.0.1:3000
+    # Never expose port 3000 directly to the network.
+    network_mode: host
     restart: unless-stopped
     environment:
       - NODE_ENV=production
-      - API_BASE_URL=${API_BASE_URL:-http://localhost:8000}
+      - HOST=127.0.0.1
+      - PORT=3000
+      - API_BASE_URL=${API_BASE_URL:-http://127.0.0.1:8000}
     depends_on:
       - agent
 
