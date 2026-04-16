@@ -4,6 +4,48 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
+## [latest] → v1.6.2
+
+---
+
+## [v1.6.2] — 2026-04-16
+
+### Summary
+Makes `scripts/onboard.sh` a true one-shot production installer for Ubuntu bare-metal.
+Two bugs fixed: the firewall step was opening internal loopback ports to the network;
+the native install path left users with a manual start command instead of managed services.
+
+### Fixed
+- `scripts/onboard.sh` — firewall section no longer opens ARI (8088), Agent API (8000),
+  or Dashboard (3000) in UFW/firewalld. These are loopback-only services proxied through
+  nginx and must never be world-accessible. Correct ports opened: SSH 22, HTTP 80,
+  HTTPS 443, SIP 5060, RTP 10000–19999, Agent RTP 20000–20100.
+- `scripts/onboard.sh` — native install "next steps" no longer tells users to run
+  `python main.py` in a terminal. Output now references systemd service status commands
+  and log tail commands, consistent with the production service model.
+
+### Added
+- `scripts/onboard.sh` — new **Step 11: Production Services** (native mode only):
+  - Creates `helix` system user (`useradd -r`, no login shell)
+  - Rsyncs repo to `/opt/helix/` and sets `helix:helix` ownership
+  - Installs and enables `systemd/helix-agent.service` and `systemd/helix-dashboard.service`
+  - Optionally starts services immediately with pass/fail status check
+  - Installs nginx, copies `deploy/nginx-helix.conf`, prompts for domain/IP,
+    enables site, removes default site, runs `nginx -t` before enabling
+  - Writes Ollama systemd drop-in override to bind to `127.0.0.1:11434`
+  - Locks `.env` to `chmod 600 / helix:helix` ownership
+- `scripts/onboard.sh` — header comment updated to document all 11 steps
+- `HELIX_VERSION` bumped to `v1.6.2` (displayed in banner and summary)
+- `TOTAL_STEPS` updated to 11
+
+### Result
+Running `bash scripts/onboard.sh` on a fresh Ubuntu 24.04 server now produces a
+fully production-ready deployment: all services managed by systemd, public traffic
+through nginx, internal services loopback-only, secrets locked down, firewall
+correctly hardened.
+
+---
+
 ## [latest] → v1.6.1
 
 ---

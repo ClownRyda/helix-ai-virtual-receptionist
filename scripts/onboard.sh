@@ -14,7 +14,10 @@
 #   5. Writes agent/.env, asterisk/etc/asterisk/ari.conf, pjsip.conf
 #   6. Guides Google Calendar OAuth setup
 #   7. Validates all services are reachable
-#   8. Prints a final summary with next steps
+#   8. (Native) Creates helix system user, installs systemd units + nginx
+#   9. Locks down .env (chmod 600, helix:helix)
+#  10. Binds Ollama to 127.0.0.1:11434 via systemd override
+#  11. Prints a final summary with next steps
 #
 # Supported platforms: Ubuntu 20.04+, Debian 11+, macOS 13+ (native only)
 # Docker mode also supported on any platform with Docker Engine installed.
@@ -31,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6"
+HELIX_VERSION="v1.6.2"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -167,7 +170,7 @@ fi
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 1 — Install Mode
 # ═════════════════════════════════════════════════════════════════════════════
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 step "1" "Install Mode"
 
 echo ""
@@ -619,36 +622,164 @@ if [[ "$DEPLOY_MODE" == "docker" ]]; then
 fi
 
 # ── Firewall (Linux native only) ─────────────────────────────────────────────
+# NOTE: 8088 (ARI), 8000 (agent API), 3000 (dashboard) are loopback-only.
+# Only SIP, RTP, and nginx (80/443) are opened to the network.
 if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
     section "Firewall"
     if command_exists ufw; then
         prompt_yn OPEN_FW "Open required ports in UFW firewall?" "y"
         if [[ "$OPEN_FW" == "true" ]]; then
-            sudo ufw allow 5060/udp  comment "SIP" 2>/dev/null || true
-            sudo ufw allow 5060/tcp  comment "SIP" 2>/dev/null || true
-            sudo ufw allow 8088/tcp  comment "ARI" 2>/dev/null || true
-            sudo ufw allow 8000/tcp  comment "Helix API" 2>/dev/null || true
-            sudo ufw allow 3000/tcp  comment "Helix Dashboard" 2>/dev/null || true
-            sudo ufw allow 10000:20100/udp comment "Asterisk RTP" 2>/dev/null || true
+            sudo ufw allow 22/tcp    comment "SSH"         2>/dev/null || true
+            sudo ufw allow 80/tcp    comment "HTTP/nginx"  2>/dev/null || true
+            sudo ufw allow 443/tcp   comment "HTTPS/nginx" 2>/dev/null || true
+            sudo ufw allow 5060/udp  comment "SIP"         2>/dev/null || true
+            sudo ufw allow 5060/tcp  comment "SIP"         2>/dev/null || true
+            sudo ufw allow 10000:19999/udp comment "Asterisk RTP"    2>/dev/null || true
             sudo ufw allow 20000:20100/udp comment "Helix Agent RTP" 2>/dev/null || true
-            log "UFW rules added (SIP 5060, ARI 8088, API 8000, Dashboard 3000, RTP 10000-20100)."
+            sudo ufw --force enable 2>/dev/null || true
+            log "UFW rules: SSH 22, nginx 80/443, SIP 5060, RTP 10000-19999/20000-20100."
+            info "ARI (8088), Agent API (8000), Dashboard (3000) stay loopback — served via nginx."
         fi
     elif command_exists firewall-cmd; then
         prompt_yn OPEN_FW "Open required ports in firewalld?" "y"
         if [[ "$OPEN_FW" == "true" ]]; then
+            sudo firewall-cmd --permanent --add-service=ssh
+            sudo firewall-cmd --permanent --add-service=http
+            sudo firewall-cmd --permanent --add-service=https
             sudo firewall-cmd --permanent --add-port=5060/udp
             sudo firewall-cmd --permanent --add-port=5060/tcp
-            sudo firewall-cmd --permanent --add-port=8088/tcp
-            sudo firewall-cmd --permanent --add-port=8000/tcp
-            sudo firewall-cmd --permanent --add-port=3000/tcp
-            sudo firewall-cmd --permanent --add-port=10000-20100/udp
+            sudo firewall-cmd --permanent --add-port=10000-19999/udp
             sudo firewall-cmd --permanent --add-port=20000-20100/udp
             sudo firewall-cmd --reload
-            log "firewalld rules added."
+            log "firewalld rules: SSH, HTTP/HTTPS, SIP 5060, RTP 10000-19999/20000-20100."
+            info "ARI (8088), Agent API (8000), Dashboard (3000) stay loopback — served via nginx."
         fi
     else
         info "No UFW or firewalld detected — skipping firewall setup."
-        warn "Make sure ports 5060/udp, 8088/tcp, 8000/tcp, 10000-20100/udp are open."
+        warn "Manually open: 22/tcp, 80/tcp, 443/tcp, 5060/udp, 10000-19999/udp, 20000-20100/udp"
+        warn "Do NOT open: 8088 (ARI), 8000 (agent API), 3000 (dashboard) — loopback only."
+    fi
+fi
+
+# =============================================================================
+# STEP 11 — Production Services (native mode only)
+# =============================================================================
+if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
+    step "11" "Production Services (systemd + nginx)"
+    echo ""
+    info "This step installs Helix AI as proper production services:"
+    info "  * Creates a dedicated 'helix' system user (no login shell)"
+    info "  * Copies the repo to /opt/helix/ and sets ownership"
+    info "  * Installs systemd units for the agent and dashboard"
+    info "  * Installs and enables nginx as the reverse proxy"
+    info "  * Locks down .env permissions to 600"
+    echo ""
+    prompt_yn SETUP_PRODUCTION "Set up production systemd + nginx now?" "y"
+
+    if [[ "$SETUP_PRODUCTION" == "true" ]]; then
+        INSTALL_PATH="/opt/helix"
+
+        section "Creating helix system user"
+        if id helix &>/dev/null; then
+            log "User 'helix' already exists."
+        else
+            sudo useradd -r -s /sbin/nologin -d "$INSTALL_PATH" helix
+            log "System user 'helix' created (no login shell)."
+        fi
+
+        section "Copying repo to $INSTALL_PATH"
+        if [[ "$(realpath "$REPO_ROOT")" != "$INSTALL_PATH" ]]; then
+            sudo mkdir -p "$INSTALL_PATH"
+            sudo rsync -a --exclude=".git" --exclude="agent/.venv" "$REPO_ROOT/" "$INSTALL_PATH/"
+            if [[ -d "$AGENT_VENV" ]]; then
+                sudo cp -r "$AGENT_VENV" "$INSTALL_PATH/agent/.venv"
+            fi
+            sudo chown -R helix:helix "$INSTALL_PATH"
+            log "Repo deployed to $INSTALL_PATH."
+        else
+            sudo chown -R helix:helix "$INSTALL_PATH"
+            log "Already at $INSTALL_PATH — ownership updated."
+        fi
+
+        section "Locking down .env permissions"
+        ENV_PROD="$INSTALL_PATH/agent/.env"
+        if [[ ! -f "$ENV_PROD" ]] && [[ -f "$ENV_FILE" ]]; then
+            sudo cp "$ENV_FILE" "$ENV_PROD"
+        fi
+        if [[ -f "$ENV_PROD" ]]; then
+            sudo chmod 600 "$ENV_PROD"
+            sudo chown helix:helix "$ENV_PROD"
+            log ".env: chmod 600, owner helix:helix."
+        else
+            warn ".env not found at $ENV_PROD — copy agent/.env there manually after setup."
+        fi
+
+        section "Installing systemd units"
+        SYSTEMD_SRC="$INSTALL_PATH/systemd"
+        if [[ -d "$SYSTEMD_SRC" ]]; then
+            for unit in helix-agent.service helix-dashboard.service; do
+                if [[ -f "$SYSTEMD_SRC/$unit" ]]; then
+                    sudo sed "s|/opt/helix|${INSTALL_PATH}|g" "$SYSTEMD_SRC/$unit" \
+                        | sudo tee "/etc/systemd/system/$unit" > /dev/null
+                    log "Installed /etc/systemd/system/$unit"
+                fi
+            done
+            sudo systemctl daemon-reload
+            sudo systemctl enable helix-agent helix-dashboard
+            log "helix-agent and helix-dashboard enabled."
+            prompt_yn START_NOW "Start Helix services now?" "y"
+            if [[ "$START_NOW" == "true" ]]; then
+                sudo systemctl start asterisk  2>/dev/null || warn "Could not start asterisk — run: sudo systemctl start asterisk"
+                sudo systemctl start helix-agent
+                sudo systemctl start helix-dashboard
+                sleep 2
+                systemctl is-active helix-agent      &>/dev/null && log  "helix-agent:     running" || warn "helix-agent:     failed — check: journalctl -u helix-agent"
+                systemctl is-active helix-dashboard  &>/dev/null && log  "helix-dashboard: running" || warn "helix-dashboard: failed — check: journalctl -u helix-dashboard"
+            fi
+        else
+            warn "systemd/ directory not found at $SYSTEMD_SRC — skipping."
+            warn "Expected: $SYSTEMD_SRC/helix-agent.service and helix-dashboard.service"
+        fi
+
+        section "Installing nginx"
+        if ! command_exists nginx; then
+            info "Installing nginx..."
+            sudo apt-get install -y nginx
+        else
+            log "nginx already installed."
+        fi
+        NGINX_CONF="$INSTALL_PATH/deploy/nginx-helix.conf"
+        if [[ -f "$NGINX_CONF" ]]; then
+            sudo cp "$NGINX_CONF" /etc/nginx/sites-available/helix
+            prompt NGINX_DOMAIN "Public domain or server IP for nginx server_name" "$SERVER_IP"
+            sudo sed -i "s|server_name _;|server_name ${NGINX_DOMAIN};|g" /etc/nginx/sites-available/helix
+            sudo ln -sf /etc/nginx/sites-available/helix /etc/nginx/sites-enabled/helix
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t 2>&1 && {
+                sudo systemctl enable --now nginx
+                log "nginx running. Dashboard: http://${NGINX_DOMAIN}/  |  API: http://${NGINX_DOMAIN}/api/"
+            } || warn "nginx config test failed — check: /etc/nginx/sites-available/helix"
+        else
+            warn "deploy/nginx-helix.conf not found — install nginx manually using deploy/nginx-helix.conf."
+        fi
+
+        section "Binding Ollama to loopback (127.0.0.1:11434)"
+        sudo mkdir -p /etc/systemd/system/ollama.service.d
+        sudo tee /etc/systemd/system/ollama.service.d/override.conf > /dev/null <<'OLLAMA_OVERRIDE'
+[Service]
+Environment="OLLAMA_HOST=127.0.0.1:11434"
+OLLAMA_OVERRIDE
+        sudo systemctl daemon-reload
+        if systemctl is-active ollama &>/dev/null; then
+            sudo systemctl restart ollama
+            log "Ollama restarted — bound to 127.0.0.1:11434."
+        else
+            log "Ollama override installed. Start with: sudo systemctl start ollama"
+        fi
+
+    else
+        info "Skipping production service setup."
+        warn "To set up later: see systemd/ and deploy/ directories, or the Production section in README.md"
     fi
 fi
 
@@ -778,18 +909,26 @@ if [[ "$DEPLOY_MODE" == "docker" ]]; then
     echo -e "    4. Dashboard: ${CYAN}http://${SERVER_IP}:3000${NC}"
     echo -e "       API:       ${CYAN}http://${SERVER_IP}:8000/docs${NC}"
 else
-    echo -e "    1. Start services:"
-    echo -e "       ${CYAN}sudo systemctl start asterisk${NC}"
-    echo -e "       ${CYAN}ollama serve &${NC}"
-    echo -e "       ${CYAN}cd agent && source .venv/bin/activate && python main.py${NC}"
+    echo -e "    1. Verify all services are running:"
+    echo -e "       ${CYAN}systemctl status helix-agent helix-dashboard asterisk ollama nginx${NC}"
     echo ""
-    echo -e "    2. Register a softphone (e.g. Zoiper) to ${BOLD}${SERVER_IP}${NC}"
+    echo -e "    2. If anything is not running:"
+    echo -e "       ${CYAN}sudo systemctl start asterisk${NC}"
+    echo -e "       ${CYAN}sudo systemctl start ollama${NC}"
+    echo -e "       ${CYAN}sudo systemctl start helix-agent helix-dashboard${NC}"
+    echo ""
+    echo -e "    3. Register a softphone (e.g. Zoiper) to ${BOLD}${SERVER_IP}${NC}"
     echo -e "       Extension: 1001–1003  |  SIP port: 5060"
     echo ""
-    echo -e "    3. Dial ${BOLD}9999${NC} to reach the AI receptionist."
+    echo -e "    4. Dial ${BOLD}9999${NC} to reach the AI receptionist."
     echo ""
-    echo -e "    4. Dashboard: ${CYAN}http://${SERVER_IP}:3000${NC}"
-    echo -e "       API:       ${CYAN}http://${SERVER_IP}:8000/docs${NC}"
+    echo -e "    5. Dashboard: ${CYAN}http://${SERVER_IP}/${NC}   (via nginx)"
+    echo -e "       API docs:  ${CYAN}http://${SERVER_IP}/api/docs${NC}   (via nginx)"
+    echo ""
+    echo -e "    ${YELLOW}Tail logs:${NC}"
+    echo -e "       ${CYAN}journalctl -fu helix-agent${NC}     — AI agent"
+    echo -e "       ${CYAN}journalctl -fu helix-dashboard${NC}  — dashboard"
+    echo -e "       ${CYAN}tail -f /var/log/asterisk/full${NC}  — Asterisk"
 fi
 
 echo ""
