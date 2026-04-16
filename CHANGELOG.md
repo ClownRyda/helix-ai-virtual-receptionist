@@ -4,6 +4,43 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
+## [latest] → v1.6.5
+
+---
+
+## [v1.6.5] — 2026-04-16
+
+### Summary
+Fixes the dashboard build failure on first install (missing `package-lock.json`)
+and a silent voicemail misconfiguration (after-hours mode set to `voicemail` but
+`VOICEMAIL_ENABLED` left `false` in `.env`).
+
+### Fixed
+
+**`scripts/onboard.sh` — dashboard `npm ci` fails without lockfile**
+- `npm ci` requires `package-lock.json` to exist and aborts if it is missing.
+  Fresh clones had no lockfile, so the dashboard build step failed immediately.
+- Fix A: `dashboard/package-lock.json` is now committed to the repo (313 KB);
+  `npm ci` works on all fresh clones going forward.
+- Fix B: `onboard.sh` now checks for the lockfile before choosing between
+  `npm ci` (fast, reproducible) and `npm install` (fallback, generates lockfile).
+  Either way the build completes.
+- Recovery command printed in warning if `dist/index.cjs` is still missing after build.
+
+**`scripts/onboard.sh` — voicemail mode selected but not enabled**
+- Choosing `AFTER_HOURS_MODE=voicemail` in the installer did not set
+  `VOICEMAIL_ENABLED=true`. The agent would hit the voicemail path and silently
+  do nothing because recording was disabled.
+- Fix: after writing `AFTER_HOURS_MODE` to `.env`, the installer now
+  automatically sets `VOICEMAIL_ENABLED=true` when mode is `voicemail`.
+
+### Added
+- `dashboard/package-lock.json` — committed to repo; `npm ci` now works on
+  all fresh installs without a network resolution step.
+- `.gitignore` — `dashboard/package-lock.json` line removed (was blocking the fix).
+
+---
+
 ## [latest] → v1.6.4
 
 ---

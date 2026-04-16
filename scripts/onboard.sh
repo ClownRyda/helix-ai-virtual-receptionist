@@ -34,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6.4"
+HELIX_VERSION="v1.6.5"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -577,6 +577,11 @@ set_env "WHISPER_COMPUTE_TYPE" "$WHISPER_COMPUTE_TYPE"
 set_env "OPERATOR_EXTENSION"   "$OPERATOR_EXTENSION"
 set_env "EMERGENCY_EXTENSION"  "$EMERGENCY_EXTENSION"
 set_env "AFTER_HOURS_MODE"     "$AFTER_HOURS_MODE"
+# If voicemail mode selected, enable voicemail recording automatically
+if [[ "$AFTER_HOURS_MODE" == "voicemail" ]]; then
+    set_env "VOICEMAIL_ENABLED" "true"
+    log "VOICEMAIL_ENABLED=true set (required for after_hours_mode=voicemail)."
+fi
 
 if [[ "$DEPLOY_MODE" == "docker" ]]; then
     set_env "AGENT_RTP_HOST"           "0.0.0.0"
@@ -736,15 +741,22 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             else
                 log "Node.js $(node --version) already installed."
             fi
-            info "Installing dashboard dependencies (npm ci)..."
-            sudo -u helix bash -c "cd '$DASHBOARD_DIR' && npm ci --ignore-scripts" 2>&1 | tail -5
+            info "Installing dashboard dependencies..."
+            # Use npm ci if lockfile is present (faster, reproducible).
+            # Fall back to npm install if lockfile is absent (generates one).
+            if [[ -f "$DASHBOARD_DIR/package-lock.json" ]]; then
+                sudo -u helix bash -c "cd '$DASHBOARD_DIR' && npm ci --ignore-scripts" 2>&1 | tail -5
+            else
+                warn "No package-lock.json found — running npm install (slower first run)."
+                sudo -u helix bash -c "cd '$DASHBOARD_DIR' && npm install --ignore-scripts" 2>&1 | tail -5
+            fi
             info "Building dashboard production bundle (npm run build)..."
             sudo -u helix bash -c "cd '$DASHBOARD_DIR' && npm run build" 2>&1 | tail -5
             if [[ -f "$DASHBOARD_DIR/dist/index.cjs" ]]; then
                 log "Dashboard built successfully: dist/index.cjs ready."
             else
                 warn "Dashboard build may have failed — dist/index.cjs not found."
-                warn "Run manually: cd $DASHBOARD_DIR && npm ci && npm run build"
+                warn "Manual recovery: sudo -u helix bash -c 'cd $DASHBOARD_DIR && npm install --ignore-scripts && npm run build'"
             fi
         else
             warn "Dashboard directory not found at $DASHBOARD_DIR — skipping build."

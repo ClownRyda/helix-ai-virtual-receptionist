@@ -21,7 +21,7 @@ node_modules/
 dashboard/node_modules/
 dashboard/dist/
 dashboard/.next/
-dashboard/package-lock.json
+# dashboard/package-lock.json — intentionally tracked so npm ci works in onboard.sh
 
 # ── Docker ────────────────────────────────────────────────────
 # Don't commit runtime data
