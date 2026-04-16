@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     # ── API server ───────────────────────────────────────────────
     api_host: str = Field("127.0.0.1", env="API_HOST")
     api_port: int = Field(8000, env="API_PORT")
+    # Comma-separated origins allowed by FastAPI CORS middleware.
+    # Default allows the local dashboard and any loopback origin.
+    api_cors_origins: str = Field("http://127.0.0.1,http://localhost", env="API_CORS_ORIGINS")
 
     # ── Database ─────────────────────────────────────────────────
     database_url: str = Field("sqlite+aiosqlite:///./pbx_assistant.db", env="DATABASE_URL")
