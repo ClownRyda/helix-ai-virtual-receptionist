@@ -34,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6.2"
+HELIX_VERSION="v1.6.4"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -603,12 +603,22 @@ fi
 # ── asterisk/pjsip.conf ───────────────────────────────────────────────────────
 section "Writing pjsip.conf"
 if [[ -f "$PJSIP_CONF" ]]; then
-    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT1001" "$EXT1001_PASS"
-    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT1002" "$EXT1002_PASS"
-    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT1003" "$EXT1003_PASS"
-    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_SERVER_IP" "$SERVER_IP"
-    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_LAN_SUBNET" "$LAN_SUBNET"
-    log "pjsip.conf updated."
+    # Extension passwords
+    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT_1001_PASSWORD" "$EXT1001_PASS"
+    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT_1002_PASSWORD" "$EXT1002_PASS"
+    replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT_1003_PASSWORD" "$EXT1003_PASS"
+    # Server IP (external_media_address / external_signaling_address)
+    replace_in_conf "$PJSIP_CONF" "YOUR_SERVER_IP" "$SERVER_IP"
+    # LAN subnet — replace the broad catch-all default with the actual LAN CIDR
+    # pjsip.conf ships with local_net=192.168.0.0/16 as the first local_net line;
+    # replace only that line so the RFC-1918 fallbacks (172.16, 10.0) are preserved
+    # unless the user's subnet already matches one of them.
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "s|local_net=192\.168\.0\.0/16.*|local_net=${LAN_SUBNET}|" "$PJSIP_CONF"
+    else
+        sed -i "s|local_net=192\.168\.0\.0/16.*|local_net=${LAN_SUBNET}|" "$PJSIP_CONF"
+    fi
+    log "pjsip.conf updated (passwords, server IP, LAN subnet)."
 else
     warn "pjsip.conf not found at expected path: $PJSIP_CONF"
 fi
@@ -714,6 +724,32 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             warn ".env not found at $ENV_PROD — copy agent/.env there manually after setup."
         fi
 
+        section "Building dashboard (native)"
+        DASHBOARD_DIR="$INSTALL_PATH/dashboard"
+        if [[ -d "$DASHBOARD_DIR" ]]; then
+            # Check Node.js is available
+            if ! command_exists node; then
+                info "Node.js not found — installing via NodeSource (LTS)..."
+                curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+                sudo apt-get install -y nodejs
+                log "Node.js $(node --version) installed."
+            else
+                log "Node.js $(node --version) already installed."
+            fi
+            info "Installing dashboard dependencies (npm ci)..."
+            sudo -u helix bash -c "cd '$DASHBOARD_DIR' && npm ci --ignore-scripts" 2>&1 | tail -5
+            info "Building dashboard production bundle (npm run build)..."
+            sudo -u helix bash -c "cd '$DASHBOARD_DIR' && npm run build" 2>&1 | tail -5
+            if [[ -f "$DASHBOARD_DIR/dist/index.cjs" ]]; then
+                log "Dashboard built successfully: dist/index.cjs ready."
+            else
+                warn "Dashboard build may have failed — dist/index.cjs not found."
+                warn "Run manually: cd $DASHBOARD_DIR && npm ci && npm run build"
+            fi
+        else
+            warn "Dashboard directory not found at $DASHBOARD_DIR — skipping build."
+        fi
+
         section "Installing systemd units"
         SYSTEMD_SRC="$INSTALL_PATH/systemd"
         if [[ -d "$SYSTEMD_SRC" ]]; then
@@ -749,7 +785,24 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             log "nginx already installed."
         fi
         NGINX_CONF="$INSTALL_PATH/deploy/nginx-helix.conf"
+        NGINX_MAP_CONF="$INSTALL_PATH/deploy/nginx-helix-map.conf"
         if [[ -f "$NGINX_CONF" ]]; then
+            # Install the WebSocket upgrade map into nginx http context (conf.d)
+            # This MUST be copied before nginx -t or the config test will fail.
+            if [[ -f "$NGINX_MAP_CONF" ]]; then
+                sudo mkdir -p /etc/nginx/conf.d
+                sudo cp "$NGINX_MAP_CONF" /etc/nginx/conf.d/helix-map.conf
+                log "nginx WebSocket map installed: /etc/nginx/conf.d/helix-map.conf"
+            else
+                # Fallback: write the map inline if the file is missing
+                sudo tee /etc/nginx/conf.d/helix-map.conf > /dev/null <<'NGINX_MAP'
+map $http_upgrade $helix_connection_upgrade {
+    default  upgrade;
+    ''       close;
+}
+NGINX_MAP
+                log "nginx WebSocket map written inline to /etc/nginx/conf.d/helix-map.conf"
+            fi
             sudo cp "$NGINX_CONF" /etc/nginx/sites-available/helix
             prompt NGINX_DOMAIN "Public domain or server IP for nginx server_name" "$SERVER_IP"
             sudo sed -i "s|server_name _;|server_name ${NGINX_DOMAIN};|g" /etc/nginx/sites-available/helix

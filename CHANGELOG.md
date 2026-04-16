@@ -4,6 +4,55 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
+## [latest] → v1.6.4
+
+---
+
+## [v1.6.4] — 2026-04-16
+
+### Summary
+Fixes four install blockers that would have caused a silent partial install or an
+nginx config failure on a fresh native deployment. The installer can now be run
+end-to-end on a clean Ubuntu 24.04 server.
+
+### Fixed
+
+**Critical: `scripts/onboard.sh` — wrong pjsip.conf placeholder names**
+- Replaced `CHANGE_ME_EXT1001` → `CHANGE_ME_EXT_1001_PASSWORD` (and 1002, 1003)
+- Replaced `CHANGE_ME_SERVER_IP` → `YOUR_SERVER_IP` (matches actual placeholder)
+- LAN subnet: replaced broken `CHANGE_ME_LAN_SUBNET` token with a targeted
+  `sed` that replaces `local_net=192.168.0.0/16` (the default catch-all line)
+  with the user's actual CIDR; RFC-1918 fallbacks (172.16, 10.0) are preserved
+- Without this fix the installer finished successfully but left all SIP
+  extension passwords and the server IP as literal placeholder strings
+
+**Critical: `scripts/onboard.sh` — missing dashboard build step**
+- Added "Building dashboard (native)" section before systemd unit install
+- Installs Node.js LTS via NodeSource if not present
+- Runs `npm ci --ignore-scripts` then `npm run build` as the `helix` user
+- Verifies `dist/index.cjs` exists after build; warns with manual fallback if not
+- Without this fix `helix-dashboard.service` would start but immediately fail
+  because `dist/index.cjs` does not exist in a fresh clone
+
+**Critical: nginx `$connection_upgrade` undefined variable**
+- `deploy/nginx-helix.conf` referenced `$connection_upgrade` which requires
+  a `map` directive in nginx's `http` context. Without the map, `nginx -t`
+  fails and nginx will not start.
+- Fix: renamed variable to `$helix_connection_upgrade` (avoids collision with
+  any existing nginx maps) and added new `deploy/nginx-helix-map.conf`
+- `onboard.sh` now copies the map file to `/etc/nginx/conf.d/helix-map.conf`
+  before running `nginx -t`. Inline fallback writes the map if the file is
+  somehow missing.
+
+**Minor: `scripts/onboard.sh` — HELIX_VERSION was v1.6.2 (stale)**
+- Bumped to `v1.6.4` (shown in banner and final summary)
+
+### Added
+- `deploy/nginx-helix-map.conf` — new file; contains the `$helix_connection_upgrade`
+  map directive for nginx WebSocket proxying. Must be installed in `conf.d/`.
+
+---
+
 ## [latest] → v1.6.3
 
 ---
