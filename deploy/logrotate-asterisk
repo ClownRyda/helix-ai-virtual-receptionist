@@ -1,0 +1,13 @@
+# Install: sudo cp deploy/logrotate-asterisk /etc/logrotate.d/asterisk-helix
+/var/log/asterisk/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        /usr/sbin/asterisk -rx "logger rotate" > /dev/null 2>&1 || true
+    endscript
+}

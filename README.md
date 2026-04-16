@@ -1,11 +1,11 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.6-cyan)
+![Version](https://img.shields.io/badge/version-v1.6.1-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
 ![Ollama](https://img.shields.io/badge/LLM-ollama%20local-purple)
-![Stars](https://img.shields.io/github/stars/ClownRyda/helix-ai-virtual-receptionist?style=flat)
+![Stars](https://img.shields.io/github/stars/BB-AI-Arena/helix-ai-virtual-receptionist?style=flat)
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history. · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
 
@@ -573,6 +573,81 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.6 | onboard.sh is now a full system installer (Docker + native) |
 | v1.6 | Automatic Ollama detection — reuses existing local instance |
 | v1.4 | All prompts, greetings, after-hours messages, DTMF menus localized in 7 languages |
+| v1.6.1 | Production bare-metal hardening — all services bind to 127.0.0.1 |
+| v1.6.1 | systemd units for agent, dashboard, and Ollama service override reference |
+| v1.6.1 | nginx reverse proxy config (/, /api/ — ARI stays loopback-only) |
+| v1.6.1 | logrotate config for Asterisk logs (14-day retention) |
+| v1.6.1 | SQLite online backup script with 14-day rolling retention |
+| v1.6.1 | CORS hardened — configurable `API_CORS_ORIGINS` env var (no more wildcard) |
+| v1.6.1 | RTP port overlap fix: Asterisk 10000-19999, Agent 20000-20100 |
+| v1.6.1 | `asterisk/etc/asterisk/logger.conf` added (was missing — no disk logs without it) |
+
+---
+
+## Production Deployment (Ubuntu 24.04 — Bare Metal)
+
+For production bare-metal deployments (no Docker), use the files in `systemd/` and `deploy/`.
+
+### 1 — Create the `helix` system user
+```bash
+sudo useradd -r -s /sbin/nologin -d /opt/helix helix
+sudo mkdir -p /opt/helix && sudo chown helix:helix /opt/helix
+```
+
+### 2 — Install and configure services
+```bash
+# Copy repo to /opt/helix
+sudo cp -r . /opt/helix/
+sudo chown -R helix:helix /opt/helix
+
+# Install systemd units
+sudo cp systemd/helix-agent.service /etc/systemd/system/
+sudo cp systemd/helix-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now helix-agent helix-dashboard
+```
+
+### 3 — nginx reverse proxy
+```bash
+sudo apt install nginx -y
+sudo cp deploy/nginx-helix.conf /etc/nginx/sites-available/helix
+sudo ln -s /etc/nginx/sites-available/helix /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 4 — Log rotation
+```bash
+sudo cp deploy/logrotate-asterisk /etc/logrotate.d/asterisk
+```
+
+### 5 — Automated backups
+```bash
+sudo cp deploy/backup-db.sh /opt/helix/backup-db.sh
+sudo chmod +x /opt/helix/backup-db.sh
+# Add to crontab (runs daily at 2 AM):
+(crontab -l 2>/dev/null; echo "0 2 * * * /opt/helix/backup-db.sh") | crontab -
+```
+
+### 6 — Bind Ollama to loopback
+See `systemd/ollama.service.reference` for exact override instructions.
+
+### 7 — Firewall
+```bash
+bash scripts/firewall.sh   # Opens SIP (5060), RTP (10000-20100), HTTP (80), HTTPS (443)
+                            # Agent (8000), ARI (8088), Dashboard (3000) stay loopback-only
+```
+
+### Port map (production)
+| Service | Port | Binding |
+|---|---|---|
+| nginx (HTTP/HTTPS) | 80 / 443 | all interfaces |
+| SIP | 5060 | all interfaces |
+| RTP | 10000–19999 | all interfaces |
+| Agent RTP | 20000–20100 | all interfaces |
+| Asterisk ARI | 8088 | 127.0.0.1 only |
+| Python Agent API | 8000 | 127.0.0.1 only |
+| Dashboard | 3000 | 127.0.0.1 only |
+| Ollama | 11434 | 127.0.0.1 only |
 
 ---
 

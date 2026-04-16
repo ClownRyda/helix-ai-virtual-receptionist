@@ -1,0 +1,38 @@
+[Unit]
+Description=Helix AI Virtual Receptionist — React Dashboard
+Documentation=https://github.com/BB-AI-Arena/helix-ai-virtual-receptionist
+After=network.target helix-agent.service
+Wants=helix-agent.service
+
+[Service]
+Type=simple
+User=helix
+Group=helix
+WorkingDirectory=/opt/helix/dashboard
+
+# Run the pre-built production bundle (npm run build must be run first)
+ExecStart=/usr/bin/node dist/index.cjs
+
+Environment=NODE_ENV=production
+# Loopback binding — nginx proxies externally
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+# Point the dashboard's Express backend at the Python agent API
+Environment=API_BASE_URL=http://127.0.0.1:8000
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Log to journald (view with: journalctl -u helix-dashboard -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helix-dashboard
+
+[Install]
+WantedBy=multi-user.target

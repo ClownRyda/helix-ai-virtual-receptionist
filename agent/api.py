@@ -24,11 +24,21 @@ from config import settings
 
 app = FastAPI(title="Helix AI API", version="1.2.0")
 
+# Production: restrict to localhost. Set API_CORS_ORIGINS env var to
+# a comma-separated list of allowed origins if you need LAN access
+# e.g. API_CORS_ORIGINS=http://192.168.1.100 (nginx proxy address)
+import os as _os
+_cors_origins = [o.strip() for o in _os.environ.get(
+    "API_CORS_ORIGINS",
+    "http://127.0.0.1,http://localhost,http://127.0.0.1:3000,http://localhost:3000"
+).split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 

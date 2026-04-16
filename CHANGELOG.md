@@ -4,6 +4,88 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
+## [latest] → v1.6.1
+
+---
+
+## [v1.6.1] — 2026-04-16
+
+### Summary
+Production bare-metal hardening — security, service management, and operational
+readiness for Ubuntu 24.04 without Docker. All internal services now bind to
+`127.0.0.1` only; nginx terminates public traffic; systemd manages every
+process; logrotate and SQLite backups are automated.
+
+### Security Fixes
+- `agent/config.py` — `API_HOST` default changed from `0.0.0.0` → `127.0.0.1`;
+  FastAPI no longer exposed to the network without nginx in front
+- `agent/api.py` — CORS `allow_origins=["*"]` replaced with configurable
+  `API_CORS_ORIGINS` env var (defaults to `http://127.0.0.1:3000,http://localhost:3000`)
+- `asterisk/etc/asterisk/ari.conf` — `allowed_origins=*` replaced with
+  `allowed_origins=http://127.0.0.1:8088,http://localhost:8088`; ARI is
+  loopback-only and not proxied through nginx
+- `dashboard/server/index.ts` — dashboard Express server binds to
+  `process.env.HOST || "127.0.0.1"` (was hardcoded `0.0.0.0`); PORT default
+  corrected from 5000 → 3000 to match documented architecture
+- `agent/.env.example` — `API_HOST` updated to `127.0.0.1`; `API_CORS_ORIGINS`
+  documented with safe defaults
+
+### Bug Fixes
+- `asterisk/etc/asterisk/rtp.conf` — `rtpend` changed from `20000` → `19999`;
+  fixes RTP port overlap with agent's RTP listener which starts at 20000
+
+### Added
+
+**`asterisk/etc/asterisk/logger.conf`** (new — was missing from repo)
+- Configures Asterisk log channels: `full`, `error`, and `console`
+- Logs written to `/var/log/asterisk/`
+- Without this file Asterisk falls back to defaults with no disk logging
+
+**`systemd/helix-agent.service`**
+- Production systemd unit for the Python agent (`uvicorn` + `ari_agent`)
+- Runs as dedicated `helix` system user (not root)
+- `EnvironmentFile=/opt/helix/agent/.env` for secret injection
+- GPU device access via `DeviceAllow` for RTX 4090
+- `Restart=on-failure`, `RestartSec=5s`, logs to journald
+
+**`systemd/helix-dashboard.service`**
+- Production systemd unit for the React/Node dashboard
+- Runs as `helix` user; sets `HOST=127.0.0.1` and `PORT=3000`
+- `WorkingDirectory=/opt/helix/dashboard`
+
+**`systemd/ollama.service.reference`**
+- Not a unit file — documents how to override Ollama's auto-installed service
+  to bind to `127.0.0.1:11434` instead of all interfaces
+- Includes exact `systemctl edit ollama` drop-in snippet
+
+**`deploy/nginx-helix.conf`**
+- nginx reverse proxy config for production
+- `/` → dashboard at `127.0.0.1:3000` with WebSocket upgrade headers
+- `/api/` → agent at `127.0.0.1:8000`; 120 s proxy timeout for LLM responses
+- ARI (`8088`) intentionally NOT proxied — stays loopback-only
+- HTTP→HTTPS redirect stub included (SSL cert path commented for Certbot)
+
+**`deploy/logrotate-asterisk`**
+- Rotates `/var/log/asterisk/*.log` daily, 14-day retention, gzip compress
+- `postrotate` sends `logger reload` to live Asterisk process
+
+**`deploy/backup-db.sh`**
+- Hot SQLite backup using `sqlite3 .backup` (safe while agent is running)
+- 14-day rolling retention; writes to `/opt/helix/backups/`
+- Designed to be called from a daily `cron` or systemd timer
+
+### Architecture Notes
+- **Postgres not migrated**: SQLite handles single-server call volume fine.
+  Migrate when: multiple agent processes, >1M call log rows, or replication required.
+- **ARI stays loopback**: Never proxy ARI through nginx — it carries raw audio
+  WebSocket frames and must remain internal.
+- **Caddy rejected**: nginx preferred for telephony due to mature WS proxying
+  and battle-tested production use in VoIP environments.
+- **Agent not run as root**: dedicated `helix` system user with minimal
+  permissions; Asterisk runs as `asterisk` user.
+
+---
+
 ## [latest] → v1.6
 
 ---

@@ -1,0 +1,49 @@
+[Unit]
+Description=Helix AI Virtual Receptionist — Python Agent
+Documentation=https://github.com/BB-AI-Arena/helix-ai-virtual-receptionist
+After=network.target asterisk.service ollama.service
+Wants=ollama.service
+# Wait for Asterisk ARI to be accepting connections
+# (asterisk itself starts fast but ARI listener takes a few seconds)
+
+[Service]
+Type=simple
+User=helix
+Group=helix
+WorkingDirectory=/opt/helix/agent
+
+# Production virtualenv
+ExecStart=/opt/helix/agent/.venv/bin/python main.py
+
+# Environment file — must be readable by helix user only (chmod 0600)
+EnvironmentFile=/opt/helix/agent/.env
+
+# GPU access — expose GPU 0 to Whisper and Kokoro
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Restart policy — always restart on failure, wait 5s between attempts
+Restart=on-failure
+RestartSec=5s
+# Give the process 60s to start before systemd gives up
+TimeoutStartSec=60
+# Give the process 30s to clean up on stop (finish any active call)
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+# Allow GPU device access
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+
+# Log to journald (view with: journalctl -u helix-agent -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helix-agent
+
+[Install]
+WantedBy=multi-user.target

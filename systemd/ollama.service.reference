@@ -1,0 +1,39 @@
+# ============================================================
+# Ollama systemd unit — REFERENCE ONLY
+#
+# Ollama's install script (curl -fsSL https://ollama.com/install.sh | sh)
+# creates /etc/systemd/system/ollama.service automatically.
+#
+# Run this to check what was installed:
+#   systemctl cat ollama
+#
+# If the installed unit does NOT bind to 127.0.0.1:11434, override it:
+#   sudo systemctl edit ollama
+# and add the block below under [Service]:
+#
+# [Service]
+# Environment=OLLAMA_HOST=127.0.0.1:11434
+#
+# This ensures Ollama is NOT exposed on 0.0.0.0:11434 to the network.
+# ============================================================
+
+[Unit]
+Description=Ollama LLM Server
+After=network.target
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+ExecStart=/usr/local/bin/ollama serve
+# Bind to loopback only — the Python agent connects via http://127.0.0.1:11434
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=CUDA_VISIBLE_DEVICES=0
+Restart=always
+RestartSec=3s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama
+
+[Install]
+WantedBy=multi-user.target

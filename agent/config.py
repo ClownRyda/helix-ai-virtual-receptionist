@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     )
 
     # ── API server ───────────────────────────────────────────────
-    api_host: str = Field("0.0.0.0", env="API_HOST")
+    api_host: str = Field("127.0.0.1", env="API_HOST")
     api_port: int = Field(8000, env="API_PORT")
 
     # ── Database ─────────────────────────────────────────────────
