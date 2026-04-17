@@ -34,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6.7"
+HELIX_VERSION="v1.6.8"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -329,6 +329,25 @@ print('Kokoro models cached.')
     if [[ -d /etc/asterisk ]]; then
         info "Copying Helix Asterisk config files..."
         sudo cp -r "$REPO_ROOT/asterisk/etc/asterisk/"* /etc/asterisk/
+        # Detect the real Asterisk module path and inject it into asterisk.conf.
+        # Ubuntu 24.04 apt package installs to the multiarch path, not the legacy one.
+        ASTMODDIR=""
+        for candidate in \
+            /usr/lib/x86_64-linux-gnu/asterisk/modules \
+            /usr/lib/aarch64-linux-gnu/asterisk/modules \
+            /usr/lib/asterisk/modules; do
+            if [[ -d "$candidate" ]]; then
+                ASTMODDIR="$candidate"
+                break
+            fi
+        done
+        if [[ -n "$ASTMODDIR" ]]; then
+            sudo sed -i "/^\[directories\]/a astmoddir => $ASTMODDIR" /etc/asterisk/asterisk.conf
+            log "Set astmoddir => $ASTMODDIR in /etc/asterisk/asterisk.conf"
+        else
+            warn "Could not detect Asterisk module directory — Asterisk may fail to load modules."
+            warn "Manually add 'astmoddir => <path>' to /etc/asterisk/asterisk.conf"
+        fi
         sudo asterisk -rx "core reload" 2>/dev/null && log "Asterisk config reloaded." || \
             warn "Could not reload Asterisk live — restart manually: sudo systemctl restart asterisk"
     else

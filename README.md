@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.6.7-cyan)
+![Version](https://img.shields.io/badge/version-v1.6.8-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -596,9 +596,12 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.6.5 | onboard.sh: npm ci with lockfile fallback to npm install if lockfile absent |
 | v1.6.5 | onboard.sh: VOICEMAIL_ENABLED=true auto-set when after-hours mode is voicemail |
 | v1.6.6 | agent/config.py: api_cors_origins field added — pydantic crash on startup fixed |
-| v1.6.7 | agent/calendar/ renamed to agent/gcal/ — Python stdlib shadowing bug fixed |
-| v1.6.7 | onboard.sh: removes stale agent/calendar/ before rsync so shadow cannot survive upgrades |
-| v1.6.7 | onboard.sh: pre-flight port check — detects port 3000 conflict and prompts for alternate |
+| v1.6.8 | agent/calendar/ renamed to agent/gcal/ — Python stdlib shadowing bug fixed |
+| v1.6.8 | onboard.sh: removes stale agent/calendar/ before rsync so shadow cannot survive upgrades |
+| v1.6.8 | onboard.sh: pre-flight port check — detects port 3000 conflict and prompts for alternate |
+| v1.6.8 | asterisk.conf: hardcoded astmoddir removed — onboard.sh auto-detects correct module path |
+| v1.6.8 | dashboard: API base changed to same-origin /api/ — LAN access now works correctly |
+| v1.6.8 | dashboard: Router wrapper moved to include Sidebar — navigation fixed |
 
 ---
 

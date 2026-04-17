@@ -1,7 +1,9 @@
 import { QueryClient } from "@tanstack/react-query";
 
-// Point to the Python agent API
-const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000");
+// Use same-origin relative paths so the dashboard works from any LAN machine.
+// nginx proxies /api/* → http://127.0.0.1:8000 on the server.
+// Override with VITE_API_URL only for local dev (e.g. VITE_API_URL=http://192.168.4.31:8000).
+const API_BASE = (import.meta.env.VITE_API_URL || "");
 
 export const queryClient = new QueryClient({
   defaultOptions: {

@@ -4,7 +4,45 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.6.7
+## [latest] → v1.6.8
+
+---
+
+## [v1.6.8] — 2026-04-16
+
+### Summary
+Fixes three bare-metal production blockers found during live Ubuntu 24.04
+deployment: Asterisk startup failure due to wrong module path, dashboard
+navigation broken due to router scope, and dashboard API calls failing from
+any LAN machine due to hardcoded localhost origin.
+
+### Fixed
+
+**`asterisk/etc/asterisk/asterisk.conf` — hardcoded module path breaks Ubuntu 24.04**
+- Repo shipped `astmoddir => /usr/lib/asterisk/modules` which does not exist
+  on Ubuntu 24.04 apt installs. The real path is
+  `/usr/lib/x86_64-linux-gnu/asterisk/modules` (multiarch layout).
+- Asterisk exited immediately on startup: `Unable to open modules directory`.
+- Fix: removed `astmoddir` from the shipped `asterisk.conf` (Asterisk uses
+  its compiled-in default if the key is absent). `onboard.sh` now detects
+  the correct path at install time and injects `astmoddir => <detected>` after
+  copying the config, with fallback candidates for x86_64, aarch64, and legacy.
+
+**`dashboard/client/src/lib/queryClient.ts` — hardcoded localhost:8000 breaks LAN access**
+- `API_BASE` defaulted to `http://localhost:8000`. When a user opened the
+  dashboard from another machine on the LAN, `localhost` resolved to the
+  client machine rather than the server, causing all API calls to silently
+  fail (routing rules appeared to do nothing, stats wouldn’t load, etc.).
+- Fix: default is now `""` (empty string), producing same-origin relative
+  paths (`/api/calls`, `/api/stats`, etc.). nginx already proxies `/api/`
+  to `127.0.0.1:8000`. Override with `VITE_API_URL` for local dev only.
+
+**`dashboard/client/src/App.tsx` — Router scope excluded Sidebar (navigation broken)**
+- `<Sidebar />` was rendered outside the `<Router hook={useHashLocation}>`
+  wrapper. Wouter’s `<Link>` components in the sidebar had no location
+  context, so clicking any nav item stayed on the current page.
+- Fix: moved `<Router>` to wrap both `<Sidebar />` and the `<Switch>` block
+  so all nav links share the same hash-location context.
 
 ---
 

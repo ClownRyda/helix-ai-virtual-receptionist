@@ -14,10 +14,11 @@ import Settings from "@/pages/Settings";
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex min-h-screen bg-background">
-        <Sidebar />
-        <main className="flex-1 min-w-0 overflow-auto">
-          <Router hook={useHashLocation}>
+      {/* Router must wrap Sidebar so nav links get hash-location context */}
+      <Router hook={useHashLocation}>
+        <div className="flex min-h-screen bg-background">
+          <Sidebar />
+          <main className="flex-1 min-w-0 overflow-auto">
             <Switch>
               <Route path="/" component={Dashboard} />
               <Route path="/calls" component={CallLogs} />
@@ -26,9 +27,9 @@ export default function App() {
               <Route path="/appointments" component={Appointments} />
               <Route path="/settings" component={Settings} />
             </Switch>
-          </Router>
-        </main>
-      </div>
+          </main>
+        </div>
+      </Router>
       <Toaster />
     </QueryClientProvider>
   );
