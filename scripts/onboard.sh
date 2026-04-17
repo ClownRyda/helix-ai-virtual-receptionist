@@ -34,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6.8"
+HELIX_VERSION="v1.6.9"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -741,6 +741,20 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             sudo chown -R helix:helix "$INSTALL_PATH"
             log "Already at $INSTALL_PATH — ownership updated."
         fi
+
+        section "Creating runtime directories"
+        # SQLite database directory — .env.example uses ./data/pbx_assistant.db
+        # which resolves to /opt/helix/agent/data/ at runtime. If it doesn't
+        # exist SQLite cannot create the file and the agent crashes immediately.
+        sudo mkdir -p "$INSTALL_PATH/agent/data"
+        sudo chown helix:helix "$INSTALL_PATH/agent/data"
+        sudo chmod 750 "$INSTALL_PATH/agent/data"
+        log "Created $INSTALL_PATH/agent/data/ (SQLite database directory)"
+        # Voicemail spool dir — used when VOICEMAIL_ENABLED=true
+        sudo mkdir -p /var/spool/helix/voicemail
+        sudo chown -R helix:helix /var/spool/helix
+        sudo chmod -R 750 /var/spool/helix
+        log "Created /var/spool/helix/voicemail/ (voicemail audio directory)"
 
         section "Locking down .env permissions"
         ENV_PROD="$INSTALL_PATH/agent/.env"

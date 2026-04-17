@@ -4,7 +4,34 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.6.8
+## [latest] → v1.6.9
+
+---
+
+## [v1.6.9] — 2026-04-16
+
+### Summary
+Fixes two additional bare-metal blockers found during live deployment:
+SQLite crash on first boot due to missing `agent/data/` directory, and
+`chan_sip` loading alongside PJSIP causing SIP stack interference.
+
+### Fixed
+
+**`scripts/onboard.sh` — SQLite `data/` directory never created**
+- `.env.example` sets `DATABASE_URL=sqlite+aiosqlite:///./data/pbx_assistant.db`
+  but `onboard.sh` never created `/opt/helix/agent/data/`. SQLAlchemy throws
+  `OperationalError: unable to open database file` on first agent startup.
+- Fix: onboard.sh now creates `$INSTALL_PATH/agent/data/` (chmod 750, helix:helix)
+  during the install step, before starting services.
+- Also creates `/var/spool/helix/voicemail/` (used by VOICEMAIL_ENABLED=true)
+  which had the same missing-directory problem.
+
+**`asterisk/etc/asterisk/modules.conf` — chan_sip loads alongside PJSIP**
+- Asterisk autoloads `chan_sip.so` by default. With Helix using PJSIP exclusively,
+  chan_sip competing for port 5060 creates SIP registration ambiguity and
+  complicates debugging (some clients may negotiate with the wrong driver).
+- Fix: added `modules.conf` to the repo with `noload => chan_sip.so` so Helix
+  installs run a clean PJSIP-only SIP stack.
 
 ---
 
