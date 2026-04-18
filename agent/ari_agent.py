@@ -1384,6 +1384,13 @@ async def run_ari_agent():
                     handler = CallHandler(ari, channel_id, caller_id, called_number, dtmf_queue)
                     task = asyncio.create_task(handler.run())
                     active_calls[channel_id] = (handler, task)
+                    # Yield to the event loop so the CallHandler task starts
+                    # executing immediately. Without this, the ws receive loop
+                    # holds the event loop and the handler task stays frozen
+                    # until the next WebSocket message arrives — which may be
+                    # ChannelHangupRequest, cancelling the task before it ran
+                    # a single line.
+                    await asyncio.sleep(0)
 
                 elif event_type == "ChannelDtmfReceived":
                     # Route DTMF digit to the correct call's handler
