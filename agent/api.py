@@ -295,7 +295,11 @@ async def get_config():
         "business_name": settings.business_name,
         "whisper_model": settings.whisper_model,
         "ollama_model": settings.ollama_model,
-        "piper_model": settings.piper_model,
+        # TTS engine is Kokoro (replaced Piper in v1.6). Expose per-language voices.
+        "kokoro_voice_en": settings.kokoro_voice_en,
+        "kokoro_voice_es": settings.kokoro_voice_es,
+        "kokoro_voice_fr": settings.kokoro_voice_fr,
+        "kokoro_voice_it": settings.kokoro_voice_it,
         "business_hours_start": settings.business_hours_start,
         "business_hours_end": settings.business_hours_end,
         "business_timezone": settings.business_timezone,

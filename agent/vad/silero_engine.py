@@ -37,6 +37,13 @@ def _load_model():
             repo_or_dir="snakers4/silero-vad",
             model="silero_vad",
             force_reload=False,
+            # trust_repo=True is required for non-interactive startup.
+            # Without it, torch.hub prompts stdin with a trust confirmation
+            # question when the model hasn't been cached yet. In a systemd
+            # service there is no stdin, so the prompt blocks indefinitely
+            # then raises EOFError, crashing the agent and causing the
+            # ARI WebSocket to connect and immediately disconnect in a loop.
+            trust_repo=True,
         )
         log.info("Silero VAD model loaded")
     return _silero_model

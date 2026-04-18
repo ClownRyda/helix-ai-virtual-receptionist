@@ -34,7 +34,7 @@ ARI_CONF="$REPO_ROOT/asterisk/etc/asterisk/ari.conf"
 PJSIP_CONF="$REPO_ROOT/asterisk/etc/asterisk/pjsip.conf"
 AGENT_VENV="$REPO_ROOT/agent/.venv"
 
-HELIX_VERSION="v1.6.9"
+HELIX_VERSION="v1.7.0"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -767,6 +767,20 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             log ".env: chmod 600, owner helix:helix."
         else
             warn ".env not found at $ENV_PROD — copy agent/.env there manually after setup."
+        fi
+
+        # Migrate .env: remove obsolete keys that were removed in previous versions.
+        # These cause pydantic ValidationError on startup if they remain in the file.
+        if [[ -f "$ENV_PROD" ]]; then
+            OBSOLETE_ENV_KEYS=(ARI_URL PIPER_MODEL PIPER_VOICE TTS_ENGINE)
+            for okey in "${OBSOLETE_ENV_KEYS[@]}"; do
+                if sudo grep -q "^${okey}=" "$ENV_PROD" 2>/dev/null; then
+                    sudo sed -i "/^${okey}=/d" "$ENV_PROD"
+                    warn "Removed obsolete .env key: $okey (no longer in Settings model)"
+                fi
+            done
+            # Strip inline comments from value lines (not supported by python-dotenv)
+            sudo sed -i '/^[^#]/s/[[:space:]]*#[^"'"'"']*$//' "$ENV_PROD"
         fi
 
         section "Building dashboard (native)"

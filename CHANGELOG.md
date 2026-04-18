@@ -4,7 +4,64 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.6.9
+## [latest] → v1.7.0
+
+---
+
+## [v1.7.0] — 2026-04-18
+
+### Summary
+First-call reliability release. Fixes three bugs that prevented any call from
+being handled successfully on a first-boot bare-metal install: Silero VAD
+blocking on stdin trust prompt (ARI crash loop), `/api/config` crashing with
+AttributeError on the removed `piper_model` field, and stale obsolete `.env`
+keys causing pydantic ValidationError on agent startup. Also adds two utility
+scripts for safe in-place upgrades and `.env` normalization.
+
+### Fixed
+
+**`agent/vad/silero_engine.py` — Silero VAD blocks stdin on first load (EOFError / ARI flap)**
+- `torch.hub.load()` without `trust_repo=True` prompts an interactive
+  "Do you trust this repository?" question on the first call if the model
+  has not been cached. In a systemd service there is no stdin, so the prompt
+  blocks indefinitely and then raises `EOFError: EOF when reading a line`.
+- This caused the agent to crash immediately after receiving `StasisStart`,
+  producing the observed ARI WebSocket connect-disconnect flapping loop and
+  silent calls from the caller's perspective.
+- Fix: added `trust_repo=True` to `torch.hub.load()`. Safe for production —
+  the repository is pinned by name and the model hash is validated by torch.
+
+**`agent/api.py` — `/api/config` crashes with AttributeError after Kokoro migration**
+- The `GET /api/config` endpoint still referenced `settings.piper_model`,
+  which was removed from the `Settings` model when Kokoro replaced Piper in
+  v1.6. Any dashboard page or API client fetching config would trigger:
+  `AttributeError: 'Settings' object has no attribute 'piper_model'`.
+- Fix: removed `piper_model` from the response. Added `kokoro_voice_en/es/fr/it`
+  fields reflecting the current TTS engine's configuration.
+
+**`scripts/onboard.sh` — obsolete `.env` keys cause pydantic crash on upgrade**
+- Users upgrading from older installs may have `ARI_URL`, `PIPER_MODEL`,
+  `PIPER_VOICE`, or `TTS_ENGINE` in their live `.env`. pydantic `Settings`
+  raises `ValidationError: Extra inputs are not permitted` on any unknown key,
+  crashing the agent before it starts.
+- Fix: `onboard.sh` now scrubs these keys from the deployed `.env` during the
+  install/upgrade step, with a warning message for each removed key.
+- Also strips inline shell comments from value lines (e.g. `KEY=val  # note`)
+  which python-dotenv may misparse.
+
+### Added
+
+**`scripts/update-live-install.sh` — safe in-place upgrade script**
+- Syncs agent code, systemd units, and dashboard from the repo to `/opt/helix`
+  while preserving `.env`, credentials, DB, and voicemail recordings.
+- Removes stale `agent/calendar/`, clears bytecode cache, rebuilds the
+  dashboard, and restarts services.
+- Replaces the manual multi-step recovery sequence used during initial
+  bare-metal debug sessions.
+
+**`scripts/fix-live-env.sh` — `.env` normalization / migration script**
+- Removes obsolete keys, strips inline comments, deduplicates repeated keys.
+- Safe to run on any live install; backs up `.env` before modifying.
 
 ---
 

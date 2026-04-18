@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.6.9-cyan)
+![Version](https://img.shields.io/badge/version-v1.7.0-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -596,14 +596,19 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.6.5 | onboard.sh: npm ci with lockfile fallback to npm install if lockfile absent |
 | v1.6.5 | onboard.sh: VOICEMAIL_ENABLED=true auto-set when after-hours mode is voicemail |
 | v1.6.6 | agent/config.py: api_cors_origins field added — pydantic crash on startup fixed |
-| v1.6.9 | agent/calendar/ renamed to agent/gcal/ — Python stdlib shadowing bug fixed |
-| v1.6.9 | onboard.sh: removes stale agent/calendar/ before rsync so shadow cannot survive upgrades |
-| v1.6.9 | onboard.sh: pre-flight port check — detects port 3000 conflict and prompts for alternate |
-| v1.6.9 | onboard.sh: creates agent/data/ and /var/spool/helix/voicemail/ — SQLite/voicemail crash fixed |
-| v1.6.9 | asterisk/modules.conf: chan_sip disabled — PJSIP-only stack, no SIP port conflict |
-| v1.6.9 | asterisk.conf: hardcoded astmoddir removed — onboard.sh auto-detects correct module path |
-| v1.6.9 | dashboard: API base changed to same-origin /api/ — LAN access now works correctly |
-| v1.6.9 | dashboard: Router wrapper moved to include Sidebar — navigation fixed |
+| v1.7.0 | agent/calendar/ renamed to agent/gcal/ — Python stdlib shadowing bug fixed |
+| v1.7.0 | onboard.sh: removes stale agent/calendar/ before rsync so shadow cannot survive upgrades |
+| v1.7.0 | onboard.sh: pre-flight port check — detects port 3000 conflict and prompts for alternate |
+| v1.7.0 | onboard.sh: creates agent/data/ and /var/spool/helix/voicemail/ — SQLite/voicemail crash fixed |
+| v1.7.0 | asterisk/modules.conf: chan_sip disabled — PJSIP-only stack, no SIP port conflict |
+| v1.7.0 | agent/vad/silero_engine.py: trust_repo=True — EOFError/ARI flap on first call fixed |
+| v1.7.0 | agent/api.py: piper_model removed, Kokoro voices exposed in /api/config |
+| v1.7.0 | scripts/onboard.sh: obsolete .env keys (ARI_URL, PIPER_MODEL) auto-removed on upgrade |
+| v1.7.0 | scripts/update-live-install.sh: safe in-place upgrade script added |
+| v1.7.0 | scripts/fix-live-env.sh: .env normalization/migration script added |
+| v1.7.0 | asterisk.conf: hardcoded astmoddir removed — onboard.sh auto-detects correct module path |
+| v1.7.0 | dashboard: API base changed to same-origin /api/ — LAN access now works correctly |
+| v1.7.0 | dashboard: Router wrapper moved to include Sidebar — navigation fixed |
 
 ---
 
