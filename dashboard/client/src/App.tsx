@@ -10,6 +10,7 @@ import CallDetail from "@/pages/CallDetail";
 import Routing from "@/pages/Routing";
 import Appointments from "@/pages/Appointments";
 import Settings from "@/pages/Settings";
+import Voicemails from "@/pages/Voicemails";
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
               <Route path="/calls/:callId" component={CallDetail} />
               <Route path="/routing" component={Routing} />
               <Route path="/appointments" component={Appointments} />
+              <Route path="/voicemails" component={Voicemails} />
               <Route path="/settings" component={Settings} />
             </Switch>
           </main>

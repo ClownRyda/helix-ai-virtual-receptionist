@@ -25,7 +25,10 @@ async def main():
     await asyncio.get_event_loop().run_in_executor(None, get_model)
     log.info("Whisper ready")
 
-    # Pre-warm Silero VAD on startup so the first call does not stall before greeting.
+    # Pre-warm Silero VAD — loads the ~2 MB torch model once so the first
+    # live call never stalls at VAD initialisation.  The model singleton is
+    # shared across all call handlers; each handler gets its own stateful
+    # iterator on top of it.
     log.info("Pre-warming Silero VAD...")
     from vad.silero_engine import _load_model
     await asyncio.get_event_loop().run_in_executor(None, _load_model)

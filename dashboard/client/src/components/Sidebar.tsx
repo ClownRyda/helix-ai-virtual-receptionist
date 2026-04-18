@@ -1,16 +1,29 @@
 import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Radio, Voicemail } from "lucide-react";
+import { fetchJSON } from "@/lib/queryClient";
+import type { HealthStatus } from "@shared/schema";
 
 const nav = [
-  { href: "/",            label: "Dashboard",    icon: LayoutDashboard },
-  { href: "/calls",       label: "Call Logs",    icon: Phone },
-  { href: "/routing",     label: "Routing Rules",icon: GitMerge },
-  { href: "/appointments",label: "Appointments", icon: CalendarClock },
-  { href: "/settings",    label: "Settings",     icon: Settings },
+  { href: "/",             label: "Dashboard",    icon: LayoutDashboard },
+  { href: "/calls",        label: "Call Logs",    icon: Phone },
+  { href: "/routing",      label: "Routing Rules",icon: GitMerge },
+  { href: "/appointments", label: "Appointments", icon: CalendarClock },
+  { href: "/voicemails",   label: "Voicemails",   icon: Voicemail },
+  { href: "/settings",     label: "Settings",     icon: Settings },
 ];
 
 export default function Sidebar() {
   const [location] = useLocation();
+
+  const { data: health } = useQuery<HealthStatus>({
+    queryKey: ["/api/health"],
+    queryFn: () => fetchJSON("/api/health"),
+    refetchInterval: 30_000,
+  });
+
+  const version = (health as any)?.version ?? "…";
+  const ttsEngine = (health as any)?.tts_engine ?? "TTS";
 
   return (
     <aside className="sidebar">
@@ -20,7 +33,6 @@ export default function Sidebar() {
           {/* Helix waveform icon */}
           <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-label="Helix AI">
             <rect width="30" height="30" rx="7" fill="hsl(188 72% 42% / 0.15)" />
-            {/* Waveform bars */}
             <rect x="6"  y="13" width="2.5" height="4"  rx="1.2" fill="hsl(188 72% 42% / 0.5)" />
             <rect x="10" y="10" width="2.5" height="10" rx="1.2" fill="hsl(188 72% 42% / 0.75)" />
             <rect x="14" y="7"  width="2.5" height="16" rx="1.2" fill="hsl(188 72% 42%)" />
@@ -64,21 +76,21 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Service health footer */}
+      {/* Service health footer — version + TTS engine pulled from /api/health */}
       <div className="px-5 py-4 border-t border-border space-y-2">
         <div className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Services</div>
         {[
           { label: "Asterisk ARI", icon: Radio },
           { label: "Ollama LLM",   icon: null },
           { label: "Whisper STT",  icon: null },
-          { label: "Piper TTS",    icon: null },
+          { label: ttsEngine,      icon: null },
         ].map(({ label }) => (
           <div key={label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="flex-1">{label}</span>
             <span className="status-dot online" />
           </div>
         ))}
-        <div className="pt-2 text-xs text-muted-foreground/50 font-mono">v1.2</div>
+        <div className="pt-2 text-xs text-muted-foreground/50 font-mono">v{version}</div>
       </div>
     </aside>
   );

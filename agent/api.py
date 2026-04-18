@@ -22,7 +22,7 @@ from routing.router import get_all_rules, upsert_rule
 from gcal.gcal import get_available_slots
 from config import settings
 
-app = FastAPI(title="Helix AI API", version="1.2.0")
+app = FastAPI(title="Helix AI API", version="1.8.0")
 
 # Production: restrict to localhost. Set API_CORS_ORIGINS env var to
 # a comma-separated list of allowed origins if you need LAN access
@@ -159,6 +159,31 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         "avg_duration_seconds": round(avg_duration, 1),
     }
 
+
+
+# ── Daily call volume (last 7 days) ──────────────────────────────────────────
+
+@app.get("/api/stats/daily")
+async def get_daily_stats(db: AsyncSession = Depends(get_db)):
+    """Returns call counts per day for the last 7 days (UTC dates)."""
+    from datetime import datetime, timedelta, timezone
+    today = datetime.now(timezone.utc).date()
+    days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]
+    result = await db.execute(select(CallLog))
+    calls = result.scalars().all()
+    counts = {d.isoformat(): 0 for d in days}
+    for call in calls:
+        if call.started_at:
+            d = call.started_at.date() if hasattr(call.started_at, "date") else None
+            if d is None:
+                try:
+                    d = datetime.fromisoformat(str(call.started_at)).date()
+                except Exception:
+                    continue
+            key = d.isoformat()
+            if key in counts:
+                counts[key] += 1
+    return [{"date": k, "calls": v} for k, v in counts.items()]
 
 # ── Routing rules ─────────────────────────────────────────────────────────────
 
@@ -436,7 +461,14 @@ async def health():
     return {
         "status": "ok",
         "service": "helix-ai",
-        "version": "1.2.0",
+        "version": "1.8.0",
+        "tts_engine": "Kokoro",
+        "tts_voices": {
+            "en": settings.kokoro_voice_en,
+            "es": settings.kokoro_voice_es,
+            "fr": settings.kokoro_voice_fr,
+            "it": settings.kokoro_voice_it,
+        },
         "features": {
             "voicemail": settings.voicemail_enabled,
             "call_summary": settings.call_summary_enabled,
