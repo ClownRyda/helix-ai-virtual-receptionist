@@ -22,6 +22,7 @@ v1.2 additions:
   - Optional call summary via LLM (stored in CallLog.summary)
 """
 import asyncio
+import audioop
 import json
 import socket
 import struct
@@ -45,13 +46,20 @@ from vad import SileroVADEngine
 
 log = structlog.get_logger(__name__)
 
-# RTP constants
+# Internal audio is PCM16 @ 16k for VAD/STT/TTS.
 RTP_HEADER_SIZE = 12
-SAMPLE_RATE = 16000           # slin16
+SAMPLE_RATE = 16000
 FRAME_MS = 20                 # 20ms frames
 SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_MS // 1000  # 320
 BYTES_PER_FRAME = SAMPLES_PER_FRAME * 2             # 640 bytes (PCM16)
 MAX_UTTERANCE_SECONDS = 15   # Max recording per turn
+
+# ExternalMedia uses PCMU because it has a static RTP payload type and works
+# reliably without SDP negotiation. We transcode at the edge.
+RTP_PAYLOAD_TYPE = 0          # PCMU
+RTP_SAMPLE_RATE = 8000
+RTP_SAMPLES_PER_FRAME = RTP_SAMPLE_RATE * FRAME_MS // 1000  # 160
+RTP_BYTES_PER_FRAME = RTP_SAMPLES_PER_FRAME                 # 160 bytes (uLaw)
 
 
 # ── Business hours helpers ────────────────────────────────────────────────────
@@ -81,6 +89,21 @@ def _today_is_config_holiday() -> bool:
     today_str = datetime.now(tz).strftime("%Y-%m-%d")
     dates = [d.strip() for d in settings.holiday_dates.split(",") if d.strip()]
     return today_str in dates
+
+
+def _pcm16_16k_to_ulaw_8k(pcm_bytes: bytes) -> bytes:
+    if not pcm_bytes:
+        return b""
+    downsampled, _ = audioop.ratecv(pcm_bytes, 2, 1, SAMPLE_RATE, RTP_SAMPLE_RATE, None)
+    return audioop.lin2ulaw(downsampled, 2)
+
+
+def _ulaw_8k_to_pcm16_16k(payload: bytes) -> bytes:
+    if not payload:
+        return b""
+    pcm_8k = audioop.ulaw2lin(payload, 2)
+    upsampled, _ = audioop.ratecv(pcm_8k, 2, 1, RTP_SAMPLE_RATE, SAMPLE_RATE, None)
+    return upsampled
 
 
 async def _today_is_db_holiday() -> bool:
@@ -169,28 +192,38 @@ class RTPSocket:
         header = struct.pack(
             "!BBHII",
             0x80,
-            11,
+            RTP_PAYLOAD_TYPE,
             self._seq & 0xFFFF,
             self._timestamp,
             self._ssrc,
         )
         self._seq += 1
-        self._timestamp += SAMPLES_PER_FRAME
+        self._timestamp += RTP_SAMPLES_PER_FRAME
         return header
 
-    def send_pcm(self, pcm_bytes: bytes):
+    def _send_encoded_frame(self, chunk: bytes):
         if not self.asterisk_addr:
             return
-        for i in range(0, len(pcm_bytes), BYTES_PER_FRAME):
-            chunk = pcm_bytes[i:i + BYTES_PER_FRAME]
-            if len(chunk) < BYTES_PER_FRAME:
-                chunk += b"\x00" * (BYTES_PER_FRAME - len(chunk))
-            header = self._make_rtp_header(len(chunk))
-            packet = header + chunk
-            try:
-                self.sock.sendto(packet, self.asterisk_addr)
-            except OSError:
-                pass
+        if len(chunk) < RTP_BYTES_PER_FRAME:
+            chunk += b"\xff" * (RTP_BYTES_PER_FRAME - len(chunk))
+        header = self._make_rtp_header(len(chunk))
+        packet = header + chunk
+        try:
+            self.sock.sendto(packet, self.asterisk_addr)
+        except OSError:
+            pass
+
+    async def stream_pcm(self, pcm_bytes: bytes):
+        if not self.asterisk_addr:
+            return
+        encoded = _pcm16_16k_to_ulaw_8k(pcm_bytes)
+        loop = asyncio.get_running_loop()
+        next_send = loop.time()
+        for i in range(0, len(encoded), RTP_BYTES_PER_FRAME):
+            chunk = encoded[i:i + RTP_BYTES_PER_FRAME]
+            self._send_encoded_frame(chunk)
+            next_send += FRAME_MS / 1000.0
+            await asyncio.sleep(max(0, next_send - loop.time()))
 
     def close(self):
         self.sock.close()
@@ -246,7 +279,7 @@ class ARIClient:
         await self.post(f"/bridges/{bridge_id}/addChannel", json={"channel": channel_id})
 
     async def create_external_media(
-        self, app: str, external_host: str, format: str = "slin16"
+        self, app: str, external_host: str, format: str = "ulaw"
     ) -> dict:
         return await self.post(
             "/channels/externalMedia",
@@ -577,7 +610,7 @@ class CallHandler:
                 None, lambda: _recv_nonblocking(self.rtp_sock.sock, 2048)
             )
             if data and len(data) > RTP_HEADER_SIZE:
-                payload = data[RTP_HEADER_SIZE:]
+                payload = _ulaw_8k_to_pcm16_16k(data[RTP_HEADER_SIZE:])
                 no_data_count = 0
                 vad_event = vad.process_chunk(payload)
                 if vad_event and "start" in vad_event:
@@ -1141,7 +1174,7 @@ class CallHandler:
                     None, lambda: _recv_nonblocking(self.rtp_sock.sock, 2048)
                 )
                 if data and len(data) > RTP_HEADER_SIZE:
-                    payload = data[RTP_HEADER_SIZE:]
+                    payload = _ulaw_8k_to_pcm16_16k(data[RTP_HEADER_SIZE:])
                     no_data_count = 0
                     vad_event = vad.process_chunk(payload)
 
@@ -1196,9 +1229,8 @@ class CallHandler:
         loop = asyncio.get_event_loop()
         pcm = await loop.run_in_executor(None, synthesize_pcm, text, language)
         if pcm and self.rtp_sock:
-            self.rtp_sock.send_pcm(pcm)
-            duration_seconds = len(pcm) / (SAMPLE_RATE * 2)
-            await asyncio.sleep(duration_seconds + 0.2)
+            await self.rtp_sock.stream_pcm(pcm)
+            await asyncio.sleep(0.2)
 
     # ── Media setup ───────────────────────────────────────────────────────────
 
@@ -1619,7 +1651,7 @@ class TranslationRelay:
                         None, lambda: _recv_nonblocking(sock.sock, 2048)
                     )
                     if data and len(data) > RTP_HEADER_SIZE:
-                        payload = data[RTP_HEADER_SIZE:]
+                        payload = _ulaw_8k_to_pcm16_16k(data[RTP_HEADER_SIZE:])
                         no_data_count = 0
                         vad_event = vad.process_chunk(payload)
                         if vad_event and "start" in vad_event:
@@ -1650,7 +1682,7 @@ class TranslationRelay:
                 translated = await do_translate(result.text, tgt_lang, source_lang=src_lang)
                 pcm = await loop.run_in_executor(None, synthesize_pcm, translated, tgt_lang)
                 if pcm and output_sock:
-                    output_sock.send_pcm(pcm)
+                    await output_sock.stream_pcm(pcm)
                     log.info("Relay played translation", direction=label, tgt=tgt_lang, text=translated[:60])
 
             except asyncio.CancelledError:

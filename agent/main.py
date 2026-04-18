@@ -31,6 +31,13 @@ async def main():
     await asyncio.get_event_loop().run_in_executor(None, _load_model)
     log.info("Silero VAD ready")
 
+    # Pre-warm Kokoro English once so the first spoken prompt does not spend
+    # several seconds loading the pipeline/voice on the live call path.
+    log.info("Pre-warming Kokoro TTS...")
+    from tts.kokoro_engine import synthesize_pcm
+    await asyncio.get_event_loop().run_in_executor(None, synthesize_pcm, "Hello.", "en")
+    log.info("Kokoro TTS ready")
+
     # Start FastAPI in background
     config = uvicorn.Config(
         app=app,
