@@ -226,6 +226,13 @@ class ARIClient:
         async with self._session.post(f"{self.base_url}{path}", **kwargs) as r:
             if r.status in (200, 201):
                 return await r.json()
+            # Log ARI errors explicitly — silent None returns cause downstream
+            # TypeError crashes that are hard to trace back to the real cause.
+            body = await r.text()
+            log.error("ARI POST failed",
+                      path=path,
+                      status=r.status,
+                      body=body[:200])
             return None
 
     async def delete(self, path: str):
@@ -1181,26 +1188,42 @@ class CallHandler:
     async def _setup_media(self):
         self.rtp_port = _allocate_rtp_port()
         self.rtp_sock = RTPSocket(settings.agent_rtp_host, self.rtp_port)
+        log.info("_setup_media: RTP socket bound", port=self.rtp_port)
 
         bridge = await self.ari.create_bridge()
+        if not bridge:
+            raise RuntimeError("ARI create_bridge failed — check ARI POST error above for status/body")
         self.bridge_id = bridge["id"]
+        log.info("_setup_media: bridge created", bridge_id=self.bridge_id)
+
         await self.ari.add_to_bridge(self.bridge_id, self.channel_id)
+        log.info("_setup_media: caller added to bridge")
 
         rtp_advertise = settings.agent_rtp_advertise_host or settings.agent_rtp_host
         ext_host = f"{rtp_advertise}:{self.rtp_port}"
+        log.info("_setup_media: creating ExternalMedia", ext_host=ext_host)
         ext_media = await self.ari.create_external_media(settings.asterisk_app_name, ext_host)
+        if not ext_media:
+            raise RuntimeError("ARI create_external_media failed — check ARI POST error above for status/body")
         self.ext_media_id = ext_media["id"]
+        log.info("_setup_media: ExternalMedia channel created", ext_media_id=self.ext_media_id)
 
         ast_rtp_addr = await self.ari.get_channel_var(self.ext_media_id, "UNICASTRTP_LOCAL_ADDRESS")
         ast_rtp_port = await self.ari.get_channel_var(self.ext_media_id, "UNICASTRTP_LOCAL_PORT")
+        log.info("_setup_media: UNICASTRTP vars",
+                 ast_rtp_addr=ast_rtp_addr, ast_rtp_port=ast_rtp_port)
 
         if ast_rtp_addr and ast_rtp_port:
             self.rtp_sock.asterisk_addr = (ast_rtp_addr, int(ast_rtp_port))
             log.info("RTP bridge established",
                      our_port=self.rtp_port,
                      asterisk_addr=self.rtp_sock.asterisk_addr)
+        else:
+            log.warning("_setup_media: UNICASTRTP vars empty — RTP send path will be dead",
+                        ext_media_id=self.ext_media_id)
 
         await self.ari.add_to_bridge(self.bridge_id, self.ext_media_id)
+        log.info("_setup_media: ExternalMedia added to bridge — media path active")
         self.call_path.record("media_ready", rtp_port=self.rtp_port)
 
     # ── DB helpers ────────────────────────────────────────────────────────────
