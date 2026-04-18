@@ -4,7 +4,38 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.7.4
+## [latest] → v1.7.5
+
+---
+
+## [v1.7.5] — 2026-04-18
+
+### Summary
+Root cause of the silent call bug found and fixed. `ChannelHangupRequest` was
+cancelling the call handler task before `run()` got to execute past `Call started`.
+Import-path verification confirmed the correct file was loaded, and the extra
+trace logs added manually on the server confirmed `run()` never advanced beyond
+the first log line despite the code being present. Cause: the Silero VAD load
+(even from cache) takes ~1 event-loop tick, during which `ChannelHangupRequest`
+arrives in the WebSocket buffer. The WS receive loop picks it up immediately
+after `asyncio.sleep(0)` yields, calls `task.cancel()`, and the handler is dead
+before it logs anything further. Fix: remove `task.cancel()` from
+`ChannelHangupRequest` entirely. `ChannelDestroyed` is the authoritative hangup
+signal and always follows; it remains the sole cancellation trigger.
+
+### Fixed
+
+**`agent/ari_agent.py` — `ChannelHangupRequest` cancels handler before it runs (true silent call root cause)**
+- `run_ari_agent()` was calling `task.cancel()` on both `ChannelHangupRequest`
+  and `ChannelDestroyed`. `ChannelHangupRequest` fires when the far end sends
+  BYE but the channel is not yet destroyed. If the handler task hadn't had a
+  chance to advance (Silero VAD cache load, initial DB task spawn), the cancel
+  raced ahead of `run()` and killed it before any `_setup_media` log could fire.
+- Fix: `ChannelHangupRequest` is now log-only. `task.cancel()` is removed from
+  that branch entirely. `ChannelDestroyed` (which always follows) remains the
+  sole place where the handler task is cancelled and cleaned up from
+  `active_calls`.
+- Comment block explains the race in detail for future maintainers.
 
 ---
 

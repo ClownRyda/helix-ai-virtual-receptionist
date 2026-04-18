@@ -1469,14 +1469,17 @@ async def run_ari_agent():
 
                 elif event_type == "ChannelHangupRequest":
                     # ChannelHangupRequest fires when the far end sends BYE but
-                    # before the channel is actually destroyed. We cancel here too
-                    # as an early signal, but ChannelDestroyed will follow and is
-                    # the definitive cleanup trigger.
+                    # the channel is not yet destroyed. Do NOT cancel the handler
+                    # here — ChannelDestroyed is the authoritative signal and will
+                    # follow shortly. Cancelling here races against the handler
+                    # startup: if the handler task hasn't had a chance to execute
+                    # yet (e.g. Silero VAD load took a moment), the cancel arrives
+                    # before run() logs anything past "Call started", killing the
+                    # call silently. Log only; let ChannelDestroyed drive teardown.
                     channel_id = event.get("channel", {}).get("id")
                     if channel_id in active_calls:
-                        handler, task = active_calls[channel_id]
-                        task.cancel()
-                        log.info("ChannelHangupRequest — cancelling call handler early",
+                        handler, _ = active_calls[channel_id]
+                        log.info("ChannelHangupRequest — noting hangup, awaiting ChannelDestroyed",
                                  channel_id=channel_id, call_id=handler.call_id)
 
     await ari.stop()
