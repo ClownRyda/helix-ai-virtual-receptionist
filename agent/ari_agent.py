@@ -1396,17 +1396,45 @@ async def run_ari_agent():
 
                 elif event_type == "StasisEnd":
                     channel_id = event.get("channel", {}).get("id")
+                    # StasisEnd fires when a channel leaves the Stasis application
+                    # context — this includes the normal case where the caller
+                    # channel is moved into a mixing bridge via add_to_bridge().
+                    # Cancelling the handler here kills the call mid-setup.
+                    #
+                    # We log it but do NOT cancel the task or remove from
+                    # active_calls here. Actual call teardown is driven by
+                    # ChannelDestroyed (caller physically hung up) or by the
+                    # CallHandler itself completing/erroring.
                     if channel_id in active_calls:
-                        _, task = active_calls[channel_id]
-                        task.cancel()
-                        del active_calls[channel_id]
-                        log.info("StasisEnd", channel_id=channel_id)
+                        handler, _ = active_calls[channel_id]
+                        log.info("StasisEnd — channel left Stasis context (bridge transition or hangup)",
+                                 channel_id=channel_id, call_id=handler.call_id)
+                    else:
+                        log.debug("StasisEnd for untracked channel (ExternalMedia/relay/snoop)",
+                                  channel_id=channel_id)
 
-                elif event_type == "ChannelHangupRequest":
+                elif event_type == "ChannelDestroyed":
+                    # ChannelDestroyed is the authoritative signal that the caller
+                    # has physically hung up and the channel is gone. This is the
+                    # correct place to cancel the call handler.
                     channel_id = event.get("channel", {}).get("id")
                     if channel_id in active_calls:
-                        _, task = active_calls[channel_id]
+                        handler, task = active_calls.pop(channel_id)
                         task.cancel()
+                        log.info("ChannelDestroyed — cancelling call handler",
+                                 channel_id=channel_id, call_id=handler.call_id)
+
+                elif event_type == "ChannelHangupRequest":
+                    # ChannelHangupRequest fires when the far end sends BYE but
+                    # before the channel is actually destroyed. We cancel here too
+                    # as an early signal, but ChannelDestroyed will follow and is
+                    # the definitive cleanup trigger.
+                    channel_id = event.get("channel", {}).get("id")
+                    if channel_id in active_calls:
+                        handler, task = active_calls[channel_id]
+                        task.cancel()
+                        log.info("ChannelHangupRequest — cancelling call handler early",
+                                 channel_id=channel_id, call_id=handler.call_id)
 
     await ari.stop()
 
