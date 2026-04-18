@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.7.0-cyan)
+![Version](https://img.shields.io/badge/version-v1.7.4-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -609,6 +609,12 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.7.0 | asterisk.conf: hardcoded astmoddir removed — onboard.sh auto-detects correct module path |
 | v1.7.0 | dashboard: API base changed to same-origin /api/ — LAN access now works correctly |
 | v1.7.0 | dashboard: Router wrapper moved to include Sidebar — navigation fixed |
+| v1.7.1 | agent/ari_agent.py: granular _setup_media() step logging + ARI HTTP error logging |
+| v1.7.1 | agent/ari_agent.py: None guards on bridge_id/ext_media_id/rtp_sock in _setup_media() |
+| v1.7.2 | agent/ari_agent.py: StasisEnd no longer cancels call handler (bridge transition fix) |
+| v1.7.3 | agent/ari_agent.py: asyncio.sleep(0) after create_task so handler starts immediately |
+| v1.7.4 | agent/ari_agent.py: initial CallLog insert backgrounded — _setup_media() no longer blocked |
+| v1.7.4 | agent/ari_agent.py: _teardown() fallback insert prevents lost records on short calls |
 
 ---
 

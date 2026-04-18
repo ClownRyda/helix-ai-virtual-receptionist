@@ -4,7 +4,92 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.7.0
+## [latest] → v1.7.4
+
+---
+
+## [v1.7.4] — 2026-04-18
+
+### Summary
+Critical fix for the silent call bug: callers heard silence and hung up before
+Helix ever answered. Root cause — the initial `CallLog` DB write was on the
+critical path between `Call started` and `_setup_media()`. An aiosqlite delay
+(WAL flush / lock contention) was sufficient for the caller to hang up before
+media setup started, causing `ChannelHangupRequest` to cancel the task first.
+Fix: background the initial DB insert via `asyncio.create_task` and call
+`_setup_media()` immediately. `_teardown()` gains a fallback insert so no
+call record is ever lost even on very short/cancelled calls.
+
+### Fixed
+
+**`agent/ari_agent.py` — Initial `CallLog` insert blocks `_setup_media()` (silent call root cause)**
+- `CallHandler.run()` awaited `db.commit()` for the initial call log row before
+  calling `_setup_media()`. Any aiosqlite latency (WAL flush, lock contention)
+  delayed media setup by the same amount. Callers heard silence during this
+  window; if they hung up, `ChannelHangupRequest` cancelled the task before
+  `_setup_media()` ever executed — explaining why `_setup_media: RTP socket
+  bound` never appeared in logs despite v1.7.1+ code being confirmed deployed.
+- Fix: wrapped the initial insert in a nested async function and fire-and-forget
+  it with `asyncio.create_task()`. `_setup_media()` is now called immediately
+  after `Call started` with no DB round-trip on the critical path.
+- The comment block in code documents the reasoning explicitly for future
+  maintainers.
+
+**`agent/ari_agent.py` — `_teardown()` silently drops call record if background insert races**
+- If a call is cancelled before the background insert task completes (very
+  short call, immediate hangup), `_teardown()`'s `select(CallLog)` would find
+  no row and the `if cl:` guard would silently skip the update — losing the
+  call record entirely.
+- Fix: added an `else` branch that inserts a minimal `CallLog` row with
+  `disposition="cancelled"` and the full call path JSON so no call is ever
+  dropped from history, regardless of insert timing.
+
+---
+
+## [v1.7.3] — 2026-04-18
+
+### Summary
+Fixes a race where `ChannelHangupRequest` could cancel the `CallHandler` task
+before it executed a single line. `asyncio.create_task()` schedules the
+coroutine but does not run it until the event loop gets a chance to yield.
+Added `await asyncio.sleep(0)` immediately after `create_task()` in the ARI
+event loop so the handler starts before the next WebSocket message is processed.
+
+### Fixed
+- `run_ari_agent`: added `await asyncio.sleep(0)` after `asyncio.create_task(handler.run())`
+  so the handler coroutine begins executing before the ws receive loop processes
+  the next event (which may be `ChannelHangupRequest`).
+
+---
+
+## [v1.7.2] — 2026-04-18
+
+### Summary
+`StasisEnd` was incorrectly cancelling the call handler task when the caller
+channel was moved into a mixing bridge (a normal ARI operation). This caused
+all calls to terminate at bridge setup. Fixed by making `StasisEnd` log-only;
+call teardown is now exclusively driven by `ChannelDestroyed`.
+
+### Fixed
+- `run_ari_agent`: `StasisEnd` no longer calls `task.cancel()` or removes the
+  handler from `active_calls`. Teardown is driven by `ChannelDestroyed` only.
+
+---
+
+## [v1.7.1] — 2026-04-18
+
+### Summary
+Added granular step-level logging throughout `_setup_media()` (RTP socket bound,
+bridge created, caller added, ExternalMedia created, UNICASTRTP vars, both
+channels in bridge) and improved ARI HTTP error logging to capture status code
+and response body on any non-2xx reply.
+
+### Added
+- `agent/ari_agent.py`: `_setup_media()` now logs each step with `log.info`
+  so it is possible to identify exactly which ARI call stalls or fails.
+- `agent/ari_agent.py`: `ARIClient.post()` logs status code + body on error.
+- `agent/ari_agent.py`: `None` guards on `bridge_id`, `ext_media_id`, and
+  `rtp_sock` before use in `_setup_media()` with clear `RuntimeError` messages.
 
 ---
 

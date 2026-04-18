@@ -336,17 +336,32 @@ class CallHandler:
         log.info("Call started", call_id=self.call_id, caller=self.caller_id)
         self.call_path.record("call_start", caller_id=self.caller_id, called=self.called_number)
 
-        async with AsyncSessionLocal() as db:
-            call_log = CallLog(
-                call_id=self.call_id,
-                caller_id=self.caller_id,
-                called_number=self.called_number,
-                started_at=self.started_at,
-            )
-            db.add(call_log)
-            await db.commit()
+        # ── Persist initial call log in the background ────────────────────────
+        # Do NOT await this before media setup. The DB write is on the critical
+        # path: if it is slow (WAL flush, lock contention) the caller hears
+        # silence and hangs up before _setup_media() ever runs. Fire-and-forget;
+        # _save_call() at the end of the call will upsert the full record.
+        async def _persist_initial_call_log():
+            try:
+                log.info("Persisting initial call log (background)", call_id=self.call_id)
+                async with AsyncSessionLocal() as db:
+                    call_log = CallLog(
+                        call_id=self.call_id,
+                        caller_id=self.caller_id,
+                        called_number=self.called_number,
+                        started_at=self.started_at,
+                    )
+                    db.add(call_log)
+                    await db.commit()
+                log.info("Initial call log persisted", call_id=self.call_id)
+            except Exception as _e:
+                log.warning("Initial call log write failed (non-fatal)",
+                            call_id=self.call_id, error=str(_e))
+
+        asyncio.create_task(_persist_initial_call_log())
 
         try:
+            # Start media immediately — do not wait for DB before answering.
             await self._setup_media()
 
             # ── VIP check ────────────────────────────────────────────
@@ -1290,6 +1305,27 @@ class CallHandler:
                 if not cl.notes:
                     cl.notes = self.call_path.to_json()
                 await db.commit()
+            else:
+                # Background insert may not have completed yet (very short call).
+                # Insert a minimal record now so call history is never lost.
+                log.warning("_teardown: no CallLog row found — inserting now (background write raced)",
+                            call_id=self.call_id)
+                try:
+                    cl = CallLog(
+                        call_id=self.call_id,
+                        caller_id=self.caller_id,
+                        called_number=self.called_number,
+                        started_at=self.started_at,
+                        ended_at=ended_at,
+                        duration_seconds=duration,
+                        disposition="cancelled",
+                        notes=self.call_path.to_json(),
+                    )
+                    db.add(cl)
+                    await db.commit()
+                except Exception as _e:
+                    log.error("_teardown: fallback CallLog insert failed",
+                              call_id=self.call_id, error=str(_e))
 
         if self.ext_media_id:
             try:
