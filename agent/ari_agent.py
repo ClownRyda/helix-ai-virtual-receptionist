@@ -143,7 +143,7 @@ class CallPath:
             **kwargs,
         }
         self.events.append(entry)
-        log.debug("Call path event", call_id=self.call_id, **entry)
+        log.debug("Call path event", call_id=self.call_id, path_event=event, **kwargs)
 
     def to_json(self) -> str:
         return json.dumps(self.events, default=str)
@@ -326,43 +326,43 @@ class CallHandler:
         self.call_path = CallPath(self.call_id)
         # DTMF events from the main ARI loop are pushed into this queue
         self.dtmf_queue: asyncio.Queue = dtmf_queue or asyncio.Queue()
-        self.vad = SileroVADEngine(
-            threshold=settings.vad_threshold,
-            min_silence_ms=settings.vad_min_silence_ms,
-            speech_pad_ms=settings.vad_speech_pad_ms,
-        )
+        self.vad: SileroVADEngine | None = None
+
+    def _get_vad(self) -> SileroVADEngine:
+        if self.vad is None:
+            self.vad = SileroVADEngine(
+                threshold=settings.vad_threshold,
+                min_silence_ms=settings.vad_min_silence_ms,
+                speech_pad_ms=settings.vad_speech_pad_ms,
+            )
+            log.info("Per-call VAD initialized", call_id=self.call_id)
+        return self.vad
 
     async def run(self):
         log.info("Call started", call_id=self.call_id, caller=self.caller_id)
-        self.call_path.record("call_start", caller_id=self.caller_id, called=self.called_number)
-
-        # ── Persist initial call log in the background ────────────────────────
-        # Do NOT await this before media setup. The DB write is on the critical
-        # path: if it is slow (WAL flush, lock contention) the caller hears
-        # silence and hangs up before _setup_media() ever runs. Fire-and-forget;
-        # _save_call() at the end of the call will upsert the full record.
-        async def _persist_initial_call_log():
-            try:
-                log.info("Persisting initial call log (background)", call_id=self.call_id)
-                async with AsyncSessionLocal() as db:
-                    call_log = CallLog(
-                        call_id=self.call_id,
-                        caller_id=self.caller_id,
-                        called_number=self.called_number,
-                        started_at=self.started_at,
-                    )
-                    db.add(call_log)
-                    await db.commit()
-                log.info("Initial call log persisted", call_id=self.call_id)
-            except Exception as _e:
-                log.warning("Initial call log write failed (non-fatal)",
-                            call_id=self.call_id, error=str(_e))
-
-        asyncio.create_task(_persist_initial_call_log())
-
         try:
-            # Start media immediately — do not wait for DB before answering.
+            # Keep the first second of the call path as lean as possible.
+            # Any DB/logging work here can cost us the greeting and trigger a hangup.
             await self._setup_media()
+            self.call_path.record("call_start", caller_id=self.caller_id, called=self.called_number)
+
+            # Persist the initial call log only after media is up.
+            async def _persist_initial_call_log():
+                try:
+                    async with AsyncSessionLocal() as db:
+                        call_log = CallLog(
+                            call_id=self.call_id,
+                            caller_id=self.caller_id,
+                            called_number=self.called_number,
+                            started_at=self.started_at,
+                        )
+                        db.add(call_log)
+                        await db.commit()
+                except Exception as _e:
+                    log.warning("Initial call log write failed (non-fatal)",
+                                call_id=self.call_id, error=str(_e))
+
+            asyncio.create_task(_persist_initial_call_log())
 
             # ── VIP check ────────────────────────────────────────────
             vip_route = get_vip_route(self.caller_id)
@@ -567,7 +567,8 @@ class CallHandler:
         no_data_count = 0
         max_silence = int(10_000 / FRAME_MS)  # 10 seconds trailing silence = end
 
-        self.vad.reset()
+        vad = self._get_vad()
+        vad.reset()
         speech_started = False
         silence_after_speech = 0
 
@@ -578,7 +579,7 @@ class CallHandler:
             if data and len(data) > RTP_HEADER_SIZE:
                 payload = data[RTP_HEADER_SIZE:]
                 no_data_count = 0
-                vad_event = self.vad.process_chunk(payload)
+                vad_event = vad.process_chunk(payload)
                 if vad_event and "start" in vad_event:
                     speech_started = True
                     silence_after_speech = 0
@@ -1131,7 +1132,8 @@ class CallHandler:
         max_initial_silence_frames = int(settings.silence_timeout_sec * 1000 / FRAME_MS)
         loop = asyncio.get_event_loop()
 
-        self.vad.reset()
+        vad = self._get_vad()
+        vad.reset()
 
         while total_frames < max_frames:
             try:
@@ -1141,7 +1143,7 @@ class CallHandler:
                 if data and len(data) > RTP_HEADER_SIZE:
                     payload = data[RTP_HEADER_SIZE:]
                     no_data_count = 0
-                    vad_event = self.vad.process_chunk(payload)
+                    vad_event = vad.process_chunk(payload)
 
                     if vad_event and "start" in vad_event:
                         speech_started = True
@@ -1410,9 +1412,17 @@ async def run_ari_agent():
                 if event_type == "StasisStart":
                     channel = event["channel"]
                     channel_id = channel["id"]
+                    channel_name = channel.get("name", "")
                     caller_id = channel.get("caller", {}).get("number", "unknown")
                     args = event.get("args", [])
                     called_number = args[1] if len(args) > 1 else "unknown"
+
+                    # ExternalMedia channels also enter the same Stasis app.
+                    # They are transport legs, not new inbound calls.
+                    if channel_name.startswith("UnicastRTP/"):
+                        log.debug("Ignoring ExternalMedia StasisStart",
+                                  channel_id=channel_id, channel_name=channel_name)
+                        continue
 
                     log.info("StasisStart", channel_id=channel_id, caller=caller_id)
 
@@ -1471,11 +1481,8 @@ async def run_ari_agent():
                     # ChannelHangupRequest fires when the far end sends BYE but
                     # the channel is not yet destroyed. Do NOT cancel the handler
                     # here — ChannelDestroyed is the authoritative signal and will
-                    # follow shortly. Cancelling here races against the handler
-                    # startup: if the handler task hasn't had a chance to execute
-                    # yet (e.g. Silero VAD load took a moment), the cancel arrives
-                    # before run() logs anything past "Call started", killing the
-                    # call silently. Log only; let ChannelDestroyed drive teardown.
+                    # follow shortly. Cancelling here races against handler startup
+                    # and can kill the call silently before media setup begins.
                     channel_id = event.get("channel", {}).get("id")
                     if channel_id in active_calls:
                         handler, _ = active_calls[channel_id]

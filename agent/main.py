@@ -25,6 +25,12 @@ async def main():
     await asyncio.get_event_loop().run_in_executor(None, get_model)
     log.info("Whisper ready")
 
+    # Pre-warm Silero VAD on startup so the first call does not stall before greeting.
+    log.info("Pre-warming Silero VAD...")
+    from vad.silero_engine import _load_model
+    await asyncio.get_event_loop().run_in_executor(None, _load_model)
+    log.info("Silero VAD ready")
+
     # Start FastAPI in background
     config = uvicorn.Config(
         app=app,
