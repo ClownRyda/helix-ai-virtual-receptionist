@@ -676,6 +676,35 @@ sudo ufw allow 10000:20000/udp
 ```
 
 ---
+## File Ownership After Manual Deploys
+
+When copying files into `/opt/helix/` manually, always restore service-critical
+ownership afterward. The `helix` system user must own `.env`, the SQLite data
+directory, and the model cache — or the agent crashes on startup with
+`PermissionError` / `sqlite3.OperationalError`.
+
+**Post-deploy fixup (run after every manual `cp`):**
+
+```bash
+sudo chown helix:helix /opt/helix/agent/.env \
+                       /opt/helix/agent/data \
+                       /opt/helix/agent/data/pbx_assistant.db \
+                       /opt/helix/.cache
+sudo systemctl restart helix-agent
+```
+
+**Ownership model:**
+
+| Path | Owner | Why |
+|---|---|---|
+| `/opt/helix/` (dir) | `bradshaw:bradshaw` | Admin can write files without sudo |
+| `/opt/helix/agent/.env` | `helix:helix` | Agent reads secrets at startup |
+| `/opt/helix/agent/data/` | `helix:helix` | SQLite database writes |
+| `/opt/helix/agent/data/pbx_assistant.db` | `helix:helix` | SQLite database writes |
+| `/opt/helix/.cache/` | `helix:helix` | Torch/Kokoro/Silero model cache |
+
+---
+
 ## Production Deployment (Ubuntu 24.04 — Bare Metal)
 
 For production bare-metal deployments (no Docker), use the files in `systemd/` and `deploy/`.
