@@ -25,6 +25,15 @@ async def main():
     await asyncio.get_event_loop().run_in_executor(None, get_model)
     log.info("Whisper ready")
 
+    # Pre-warm Silero VAD — loads the ~2 MB torch model once so the first
+    # live call never stalls at VAD initialisation.  The model singleton is
+    # shared across all call handlers; each handler gets its own stateful
+    # iterator on top of it.
+    log.info("Pre-warming Silero VAD...")
+    from vad.silero_engine import _load_model as _load_vad
+    await asyncio.get_event_loop().run_in_executor(None, _load_vad)
+    log.info("Silero VAD ready")
+
     # Start FastAPI in background
     config = uvicorn.Config(
         app=app,

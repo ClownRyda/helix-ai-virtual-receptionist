@@ -1,6 +1,6 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.7.5-cyan)
+![Version](https://img.shields.io/badge/version-v1.8.0-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
@@ -616,9 +616,66 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.7.4 | agent/ari_agent.py: initial CallLog insert backgrounded — _setup_media() no longer blocked |
 | v1.7.4 | agent/ari_agent.py: _teardown() fallback insert prevents lost records on short calls |
 | v1.7.5 | agent/ari_agent.py: ChannelHangupRequest no longer cancels handler — true silent call fix |
+| v1.8.0 | scripts/onboard.sh: WAN IP auto-detection + external_media_address injection |
+| v1.8.0 | scripts/onboard.sh: explicit /opt/helix chown pass + .cache dir creation |
+| v1.8.0 | agent/api.py: /api/health returns tts_engine + version; /api/stats/daily added |
+| v1.8.0 | agent/main.py: Silero VAD prewarm at startup |
+| v1.8.0 | dashboard: Sidebar footer pulls version + TTS engine from /api/health |
+| v1.8.0 | dashboard: Voicemail inbox page (Voicemails.tsx) + sidebar nav entry |
+| v1.8.0 | dashboard: 7-day call volume sparkline on Dashboard home |
+| v1.8.0 | README: Remote/WAN callers section |
 
 ---
 
+
+## Remote / WAN Callers (Zoiper, External Softphones)
+
+If your softphone is on a different network (mobile data, remote office, VPN),
+Asterisk must advertise your **public WAN IP** in SDP — not your LAN IP.
+Without this, the remote phone receives `c=IN IP4 192.168.x.x` and media
+never arrives (silent call from both sides).
+
+### Symptom
+- Call connects (SIP 200 OK), agent appears to answer
+- Both sides hear nothing
+- Asterisk and Helix logs show no errors
+
+### Fix — `pjsip.conf`
+
+```ini
+[transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5060
+local_net=192.168.1.0/24      ; your LAN CIDR
+local_net=172.16.0.0/12
+local_net=10.0.0.0/8
+external_media_address=YOUR.WAN.IP.HERE
+external_signaling_address=YOUR.WAN.IP.HERE
+```
+
+Find your WAN IP:
+```bash
+curl -s https://ifconfig.me
+```
+
+Reload Asterisk after editing:
+```bash
+sudo asterisk -rx "module reload res_pjsip.so"
+```
+
+**`onboard.sh` (v1.8.0+) auto-detects your WAN IP and prompts you to confirm
+it before writing `pjsip.conf`.**  For existing installs, edit `pjsip.conf`
+manually and reload.
+
+### Firewall
+Ensure UDP 10000–20000 (RTP) and UDP 5060 (SIP) are open to the internet:
+```bash
+sudo ufw allow 5060/udp
+sudo ufw allow 10000:20000/udp
+```
+
+---
 ## Production Deployment (Ubuntu 24.04 — Bare Metal)
 
 For production bare-metal deployments (no Docker), use the files in `systemd/` and `deploy/`.

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { BarChart, Bar, Tooltip, ResponsiveContainer, XAxis } from "recharts";
 import { Link } from "wouter";
 import {
   Phone, ArrowRight, CalendarClock, ArrowLeftRight, PhoneOff,
@@ -10,6 +11,8 @@ import { fetchJSON } from "@/lib/queryClient";
 import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, Holiday } from "@shared/schema";
 import DispositionBadge from "@/components/DispositionBadge";
 import { Skeleton } from "@/components/ui/skeleton";
+
+interface DailyStat { date: string; calls: number; }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,14 @@ export default function Dashboard() {
     refetchInterval: 30_000,
   });
 
+  const { data: daily } = useQuery<DailyStat[]>({
+    queryKey: ["/api/stats/daily"],
+    queryFn: () => fetchJSON("/api/stats/daily"),
+    refetchInterval: 60_000,
+  });
+
+  const dailyMax = Math.max(1, ...(daily?.map((d) => d.calls) ?? [0]));
+
   const open = config ? isOpenNow(config) : null;
   const nextAppts = appointments
     ?.filter(a => new Date(a.scheduled_at) > new Date())
@@ -193,6 +204,56 @@ export default function Dashboard() {
               : <div className="text-2xl font-bold text-foreground mono">{value}</div>}
           </div>
         ))}
+      </div>
+
+      {/* ── 7-day call volume sparkline ── */}
+      <div className="bg-card border border-border rounded-lg px-5 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-sm font-semibold text-foreground">Call Volume — Last 7 Days</span>
+          {daily && (
+            <span className="text-xs text-muted-foreground">
+              {daily.reduce((s, d) => s + d.calls, 0)} total
+            </span>
+          )}
+        </div>
+        {!daily ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <ResponsiveContainer width="100%" height={64}>
+            <BarChart data={daily} barCategoryGap="30%">
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(v: string) =>
+                  new Date(v + "T12:00:00").toLocaleDateString([], { weekday: "short" })
+                }
+              />
+              <Tooltip
+                cursor={{ fill: "hsl(var(--primary) / 0.08)" }}
+                contentStyle={{
+                  background: "hsl(var(--card))",
+                  border: "1px solid hsl(var(--border))",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  color: "hsl(var(--foreground))",
+                }}
+                formatter={(v: number) => [v, "Calls"]}
+                labelFormatter={(l: string) =>
+                  new Date(l + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric" })
+                }
+              />
+              <Bar
+                dataKey="calls"
+                fill="hsl(188 72% 42%)"
+                radius={[3, 3, 0, 0]}
+                maxBarSize={32}
+                opacity={0.85}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {/* ── Main 2-col grid ── */}

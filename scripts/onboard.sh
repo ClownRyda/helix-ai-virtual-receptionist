@@ -512,6 +512,42 @@ while ! echo "$LAN_SUBNET" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9
     prompt LAN_SUBNET "LAN subnet CIDR" ""
 done
 
+# ── WAN / public IP detection ─────────────────────────────────────────────────
+# Remote softphones (e.g. Zoiper on a mobile network) require Asterisk to
+# advertise the public WAN IP in SDP, not the LAN IP.  Without this, Asterisk
+# sends c=IN IP4 <LAN_IP> to the remote caller and media never arrives.
+# We auto-detect the WAN IP and prompt the user to confirm it before writing
+# it to pjsip.conf as external_media_address / external_signaling_address.
+WAN_IP=""
+DETECTED_WAN=""
+if command -v curl &>/dev/null; then
+    DETECTED_WAN="$(curl -sf --max-time 4 https://ifconfig.me 2>/dev/null || curl -sf --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+fi
+
+echo ""
+if [[ "$DETECTED_WAN" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    info "Detected public WAN IP: ${BOLD}${DETECTED_WAN}${NC}"
+    info "Remote softphones (e.g. Zoiper on 4G/LTE) need this in pjsip.conf."
+    echo -e "  ${YELLOW}Leave blank to use LAN IP only (fine for internal softphones).${NC}"
+    prompt WAN_IP "Public WAN IP for remote callers (detected: $DETECTED_WAN)" "$DETECTED_WAN"
+else
+    info "Could not auto-detect public WAN IP."
+    echo -e "  ${YELLOW}If you have remote softphones (e.g. Zoiper on 4G/LTE), enter your WAN IP.${NC}"
+    echo -e "  ${YELLOW}Leave blank to use LAN IP only (fine for internal softphones).${NC}"
+    prompt WAN_IP "Public WAN IP (or leave blank for LAN-only)" ""
+fi
+# Validate if provided
+if [[ -n "$WAN_IP" ]]; then
+    while ! echo "$WAN_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; do
+        warn "Enter a valid IP address or leave blank."
+        prompt WAN_IP "Public WAN IP" ""
+        [[ -z "$WAN_IP" ]] && break
+    done
+fi
+# If blank, fall back to LAN IP (LAN-only setup)
+[[ -z "$WAN_IP" ]] && WAN_IP="$SERVER_IP"
+log "external_media_address / external_signaling_address will be set to: $WAN_IP"
+
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 7 — Extensions & Routing
 # ═════════════════════════════════════════════════════════════════════════════
@@ -631,8 +667,9 @@ if [[ -f "$PJSIP_CONF" ]]; then
     replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT_1001_PASSWORD" "$EXT1001_PASS"
     replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT_1002_PASSWORD" "$EXT1002_PASS"
     replace_in_conf "$PJSIP_CONF" "CHANGE_ME_EXT_1003_PASSWORD" "$EXT1003_PASS"
-    # Server IP (external_media_address / external_signaling_address)
-    replace_in_conf "$PJSIP_CONF" "YOUR_SERVER_IP" "$SERVER_IP"
+    # external_media_address / external_signaling_address
+    # Use WAN_IP (may equal SERVER_IP for LAN-only setups).
+    replace_in_conf "$PJSIP_CONF" "YOUR_SERVER_IP" "$WAN_IP"
     # LAN subnet — replace the broad catch-all default with the actual LAN CIDR
     # pjsip.conf ships with local_net=192.168.0.0/16 as the first local_net line;
     # replace only that line so the RFC-1918 fallbacks (172.16, 10.0) are preserved
@@ -750,6 +787,16 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
         sudo chown helix:helix "$INSTALL_PATH/agent/data"
         sudo chmod 750 "$INSTALL_PATH/agent/data"
         log "Created $INSTALL_PATH/agent/data/ (SQLite database directory)"
+        # Ensure Torch/Kokoro/Silero cache dir is owned by helix so model
+        # downloads and cache writes don't fail with Permission denied.
+        sudo mkdir -p "$INSTALL_PATH/.cache"
+        sudo chown -R helix:helix "$INSTALL_PATH/.cache"
+        log "Cache dir $INSTALL_PATH/.cache/ owned by helix."
+        # Final safety pass: ensure everything under INSTALL_PATH is helix-owned.
+        # rsync + selective copies can leave root-owned files that cause silent
+        # runtime failures (SQLite EACCES, Kokoro cache write errors).
+        sudo chown -R helix:helix "$INSTALL_PATH"
+        log "Ownership pass: $INSTALL_PATH fully owned by helix:helix."
         # Voicemail spool dir — used when VOICEMAIL_ENABLED=true
         sudo mkdir -p /var/spool/helix/voicemail
         sudo chown -R helix:helix /var/spool/helix

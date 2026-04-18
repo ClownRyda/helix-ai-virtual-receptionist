@@ -4,7 +4,75 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.7.5
+## [latest] → v1.8.0
+
+---
+
+## [v1.8.0] — 2026-04-18
+
+### Summary
+Batch improvement release covering the remaining post-audio-fix hardening and
+dashboard features. Key items: `onboard.sh` now auto-detects the public WAN IP
+and writes `external_media_address` / `external_signaling_address` into
+`pjsip.conf` — the root cause of the silent-call-from-remote-softphone issue
+that hit this install. Silero VAD is now prewarmed at startup alongside Whisper
+and Kokoro so no model loading happens on a live call path. The dashboard gains
+a Voicemail inbox page, a 7-day call volume sparkline, and a live-updating
+sidebar footer that pulls version and TTS engine name from `/api/health`.
+
+### Added
+
+**`scripts/onboard.sh` — WAN IP auto-detection**
+- Detects the machine's public WAN IP via `curl ifconfig.me` / `api.ipify.org`.
+- Prompts the user to confirm (pre-filled with detected value) or override.
+- Writes confirmed WAN IP as `external_media_address` / `external_signaling_address`
+  in `pjsip.conf` instead of the LAN `SERVER_IP`.
+- Falls back to `SERVER_IP` if user leaves blank (LAN-only setup).
+- Prevents the "remote caller hears silence" issue that occurs when Asterisk
+  advertises the LAN IP in SDP to a softphone on a different network.
+
+**`scripts/onboard.sh` — explicit final ownership pass**
+- After all file deploys, runs `chown -R helix:helix $INSTALL_PATH` and
+  `mkdir -p $INSTALL_PATH/.cache && chown -R helix:helix $INSTALL_PATH/.cache`.
+- Prevents silent Permission denied failures in SQLite, Kokoro cache writes,
+  and Silero/Torch hub cache that occurred when rsync left root-owned files.
+
+**`agent/main.py` — Silero VAD prewarm at startup**
+- `_load_vad()` is now called in the startup sequence alongside Whisper and
+  Kokoro prewarms. The model singleton is loaded once; all call handlers share
+  it with independent per-call iterator state.
+- Eliminates per-call VAD init latency from the live call path.
+
+**`agent/api.py` — `/api/health` TTS metadata + version**
+- `/api/health` now returns `tts_engine: "Kokoro"` and `version: "1.8.0"`.
+- Sidebar footer reads these values live instead of hardcoding "Piper TTS" / "v1.2".
+
+**`agent/api.py` — `/api/stats/daily` endpoint**
+- Returns per-day call counts for the last 7 days (UTC).
+- Used by the new dashboard sparkline.
+
+**`dashboard/` — Voicemail inbox page**
+- `Voicemails.tsx`: full inbox table with status badges (New / Read / Archived),
+  caller ID, timestamp, duration, transcript preview, and mark-read / archive
+  actions via PATCH `/api/voicemails/{id}`.
+- `Sidebar.tsx`: "Voicemails" nav entry added (uses existing `Voicemail` icon
+  from lucide-react, already imported but unused).
+- `App.tsx`: `/voicemails` route wired up.
+
+**`dashboard/` — 7-day call volume sparkline**
+- Bar chart on Dashboard home showing call counts per day for the last 7 days.
+- Uses Recharts `BarChart`/`Bar`/`ResponsiveContainer` (added to dependencies).
+- Tooltip shows date and count; X-axis shows weekday abbreviations.
+
+**`README.md` — Remote/WAN callers section**
+- Documents the `external_media_address` / `external_signaling_address` requirement.
+- Explains the symptom (silent call, no errors), the fix, how to find WAN IP,
+  and required firewall rules. Prevents future installers spending a debug session
+  on this.
+
+---
+
+## [v1.7.5]
 
 ---
 
