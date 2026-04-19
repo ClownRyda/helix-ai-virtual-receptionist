@@ -20,6 +20,54 @@ and Kokoro so no model loading happens on a live call path. The dashboard gains
 a Voicemail inbox page, a 7-day call volume sparkline, and a live-updating
 sidebar footer that pulls version and TTS engine name from `/api/health`.
 
+### Confirmed working on bare-metal Ubuntu 24.04 (RTX 4090)
+- Dashboard through nginx port 80 → Express 3001 → FastAPI 8000
+- Asterisk PJSIP registration, 1001 → 9999 dial path
+- AI greeting audible to remote caller (Zoiper on WAN)
+- Caller speech transcribed and responded to
+- Full AI conversation loop working end-to-end
+
+### Known live host issues (not blocking)
+- Whisper running on CPU (`WHISPER_DEVICE=cpu`) — `libcublas.so.12` missing on
+  this Ubuntu 24.04 install. Fix: `sudo apt install libcublas12`. STT works
+  on CPU but with higher latency (~3-5s vs sub-second on GPU).
+- `/opt/helix/.cache` has permission warnings — non-fatal, models load from
+  cache correctly.
+
+### Added
+- `agent/api.py`: `/api/health` returns `tts_engine` + `version: "1.8.0"`
+- `agent/api.py`: `/api/stats/daily` — per-day call counts for last 7 days
+- `agent/main.py`: Silero VAD prewarmed at startup
+- `dashboard/`: Voicemail inbox page (`Voicemails.tsx`) + sidebar nav + route
+- `dashboard/`: 7-day call volume sparkline (Recharts) on Dashboard home
+- `dashboard/`: Sidebar footer reads live version + TTS engine from `/api/health`
+- `scripts/onboard.sh`: WAN IP auto-detection + `pjsip.conf` external address injection
+- `scripts/onboard.sh`: explicit final `chown -R helix:helix /opt/helix` + `.cache` pass
+- `README.md`: Remote/WAN callers section; file ownership model; Ubuntu 24.04 CUDA note
+
+### Secret game mode (experimental, live only)
+- Trigger phrase: "super secret game mode"
+- Detects caller language, runs a 20-questions style guessing game
+- Features: structured candidate profile, anti-repeat logic, agitation behavior
+  near the end, non-repeating fallback question ladder
+- Committed in `agent/llm/intent_engine.py`
+
+---
+
+---
+
+## [v1.8.0 — original entry] — 2026-04-18
+
+### Summary
+Batch improvement release covering the remaining post-audio-fix hardening and
+dashboard features. Key items: `onboard.sh` now auto-detects the public WAN IP
+and writes `external_media_address` / `external_signaling_address` into
+`pjsip.conf` — the root cause of the silent-call-from-remote-softphone issue
+that hit this install. Silero VAD is now prewarmed at startup alongside Whisper
+and Kokoro so no model loading happens on a live call path. The dashboard gains
+a Voicemail inbox page, a 7-day call volume sparkline, and a live-updating
+sidebar footer that pulls version and TTS engine name from `/api/health`.
+
 ### Added
 
 **`scripts/onboard.sh` — WAN IP auto-detection**

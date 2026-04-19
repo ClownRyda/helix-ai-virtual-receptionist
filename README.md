@@ -298,7 +298,7 @@ cp agent/.env.example agent/.env
 |---|---|---|
 | `WHISPER_MODEL` | `base.en` | English-only model |
 | `WHISPER_MODEL_MULTILINGUAL` | `base` | Multilingual model — must not be a `.en` variant |
-| `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu` |
+| `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu`. If CUDA fails with `libcublas.so.12 not found`, set to `cpu` or run `sudo apt install libcublas12`. |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Model for intent, conversation, translation |
 | `KOKORO_VOICE_EN` | `af_heart` | Kokoro voice — English |
 | `KOKORO_VOICE_ES` | `ef_dora` | Kokoro voice — Spanish |
@@ -500,7 +500,7 @@ helix-ai-virtual-receptionist/
 |---|---|---|
 | GPU | None required (CPU mode works) | NVIDIA RTX 3080+ (CUDA) |
 | RAM | 8 GB | 16 GB+ |
-| OS | Ubuntu 22.04 | Ubuntu 22.04 |
+| OS | Ubuntu 22.04 | Ubuntu 24.04 (tested/proven) |
 | Disk | 10 GB | 20 GB (models + voicemail recordings) |
 
 **Model VRAM footprint (GPU mode):**
@@ -513,7 +513,9 @@ helix-ai-virtual-receptionist/
 | **Total** | | **~5.2 GB** |
 
 RTX 4090 (24 GB) handles everything with room to spare. RTX 3080 (10 GB) works fine.  
-CPU-only mode: set `WHISPER_DEVICE=cpu` in `.env` (or choose option 2 in the onboarding wizard). Expect 3-5 second STT latency instead of sub-second.  
+CPU-only mode: set `WHISPER_DEVICE=cpu` in `.env` (or choose option 2 in the onboarding wizard). Expect 3-5 second STT latency instead of sub-second.
+
+**CUDA on Ubuntu 24.04:** If Whisper fails with `libcublas.so.12: cannot open shared object file`, install the missing library: `sudo apt install libcublas12`. This is a known gap between the CUDA toolkit and the Ubuntu 24.04 package split.  
 Windows Docker Desktop testing always runs on CPU — slower but functional for development.
 
 ---
@@ -578,6 +580,38 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | v1.6.1 | nginx reverse proxy config (/, /api/ — ARI stays loopback-only) |
 | v1.6.1 | logrotate config for Asterisk logs (14-day retention) |
 | v1.6.1 | SQLite online backup script with 14-day rolling retention |
+| v1.6.2 | `onboard.sh` true one-shot installer with full system setup |
+| v1.6.3 | Docker hardening |
+| v1.6.4 | pjsip.conf placeholder fixes, dashboard build, nginx `$connection_upgrade` map |
+| v1.6.5 | `package-lock.json` committed, `npm ci` fallback, `VOICEMAIL_ENABLED` auto-set |
+| v1.6.6 | `api_cors_origins` added to Settings |
+| v1.6.7 | `agent/calendar/` → `agent/gcal/` (fixes Python stdlib shadow crash) |
+| v1.6.7 | `onboard.sh`: rsync stale-dir cleanup, port conflict check (3000/Open WebUI) |
+| v1.6.8 | Asterisk module path auto-detected for Ubuntu 24.04 multiarch layout |
+| v1.6.8 | Dashboard API base changed to same-origin `/api/` — LAN browser access fixed |
+| v1.6.8 | Dashboard Router scope fix — sidebar navigation works correctly |
+| v1.6.9 | SQLite data dir, voicemail spool dir, `chan_sip` disabled |
+| v1.7.0 | Silero VAD `trust_repo=True` — no more interactive trust prompt crash |
+| v1.7.0 | `/api/config` returns Kokoro voices (was returning stale Piper fields) |
+| v1.7.0 | `.env` migration script + `ARI_URL` obsolete key warning |
+| v1.7.0 | `update-live-install.sh` — safe in-place upgrade script |
+| v1.7.1 | `_setup_media()` step-level logging; ARI HTTP error logging |
+| v1.7.2 | `StasisEnd` no longer cancels call handler during bridge transition |
+| v1.7.3 | `asyncio.sleep(0)` after `create_task` — handler starts before next WS message |
+| v1.7.4 | Initial `CallLog` DB insert backgrounded — `_setup_media()` no longer blocked |
+| v1.7.5 | `ChannelHangupRequest` no longer cancels handler — true silent call root cause fixed |
+| v1.8.0 | ExternalMedia codec switched to PCMU/ulaw; PCM16↔ulaw transcode helpers |
+| v1.8.0 | RTP streamed at real-time 20 ms pacing (was burst-then-sleep) |
+| v1.8.0 | `UnicastRTP/...` StasisStart events ignored (were spawning fake call handlers) |
+| v1.8.0 | Whisper + Kokoro + Silero VAD all prewarmed at startup |
+| v1.8.0 | `onboard.sh`: WAN IP auto-detection → `external_media_address` in `pjsip.conf` |
+| v1.8.0 | `onboard.sh`: explicit final `chown -R helix:helix /opt/helix` pass |
+| v1.8.0 | Dashboard: Voicemail inbox page with status badges, transcript, archive actions |
+| v1.8.0 | Dashboard: 7-day call volume sparkline on home page |
+| v1.8.0 | Dashboard: sidebar footer pulls live version + TTS engine from `/api/health` |
+| v1.8.0 | `/api/stats/daily` endpoint: per-day call counts for last 7 days |
+| v1.8.0 | README: Remote/WAN callers section; file ownership model documented |
+| v1.8.0 | Secret game mode: 20-questions style guessing game with structured profile, candidate tracking, anti-repeat logic, agitation behavior |
 | v1.6.1 | CORS hardened — configurable `API_CORS_ORIGINS` env var (no more wildcard) |
 | v1.6.1 | RTP port overlap fix: Asterisk 10000-19999, Agent 20000-20100 |
 | v1.6.1 | `asterisk/etc/asterisk/logger.conf` added (was missing — no disk logs without it) |
@@ -767,20 +801,20 @@ bash scripts/firewall.sh   # Opens SIP (5060), RTP (10000-20100), HTTP (80), HTT
 | Agent RTP | 20000–20100 | all interfaces |
 | Asterisk ARI | 8088 | 127.0.0.1 only |
 | Python Agent API | 8000 | 127.0.0.1 only |
-| Dashboard | 3000 | 127.0.0.1 only |
+| Dashboard | 3001 | 127.0.0.1 only (3000 reserved for Open WebUI) |
 | Ollama | 11434 | 127.0.0.1 only |
 
 ---
 
 ### 🔜 Planned
 
+- [ ] **CUDA Whisper on Ubuntu 24.04** — verify `libcublas12` install path in `onboard.sh` so GPU STT works out of the box
 - [ ] **Barge-in** — interrupt AI mid-sentence when caller starts speaking
 - [ ] **SIP trunk integration** — Twilio, VoIP.ms, or any ITSP for real inbound DID numbers
 - [ ] **SMS callback confirmation** — text the caller a confirmation after scheduling (Twilio)
 - [ ] **Faster translation** — swap Ollama translation path for Helsinki-NLP opus-mt (~100ms vs ~2s)
 - [ ] **Wake-word detection** — skip VAD warmup on fast responses
 - [ ] **PostgreSQL support** — drop-in swap from SQLite for production-scale deployments
-- [ ] **Dashboard Voicemails page** — in-browser playback + transcript view
 - [ ] **GitHub Releases** — formal release pages with changelogs for v1.2 / v1.3 / v1.4
 - [ ] **Additional languages** — Portuguese (PT), Polish (PL), Arabic (AR) when Kokoro adds support
 - [ ] **Web-based onboarding** — browser UI equivalent of the onboarding wizard
