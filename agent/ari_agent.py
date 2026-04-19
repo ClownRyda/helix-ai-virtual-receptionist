@@ -49,11 +49,10 @@ from routing.agents import (
     AGENT_LANGUAGE_DIGITS,
     AgentRoute,
     LANGUAGE_NAMES as AGENT_LANGUAGE_NAMES,
-    find_available_agent,
+    claim_agent_for_call,
     get_agent_by_extension,
     register_or_update_agent,
     release_agent_from_call,
-    reserve_agent_for_call,
     set_agent_state,
 )
 from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage, AgentProfile
@@ -91,18 +90,35 @@ AGENT_FEATURE_AVAILABLE = "agent-available"
 AGENT_FEATURE_BREAK = "agent-break"
 AGENT_FEATURE_OFFLINE = "agent-offline"
 
-AGENT_CALLER_TRANSLATION_PROMPT = (
-    "Welcome.\n"
-    "Speak naturally in your language.\n"
-    "If your agent speaks a different language, I will translate the conversation in real time."
-)
+AGENT_CALLER_TRANSLATION_PROMPTS = {
+    "en": "Connecting you to an agent now. They speak a different language — I'll translate for you in real time. Just speak naturally.",
+    "es": "Le estoy conectando con un agente. Habla un idioma diferente — traduciré en tiempo real. Hable con naturalidad.",
+    "fr": "Je vous mets en relation avec un agent. Il parle une langue différente — je traduirai en temps réel. Parlez naturellement.",
+    "it": "La sto collegando con un operatore. Parla una lingua diversa — tradurrò in tempo reale. Parli con naturalezza.",
+    "de": "Ich verbinde Sie mit einem Mitarbeiter. Er spricht eine andere Sprache — ich übersetze in Echtzeit. Sprechen Sie ganz normal.",
+    "ro": "Vă conectez cu un agent. Vorbește o altă limbă — voi traduce în timp real. Vorbiți firesc.",
+    "he": "אני מחבר אותך עם נציג. הוא דובר שפה אחרת — אני אתרגם בזמן אמת. דבר באופן טבעי.",
+}
 
-AGENT_WHISPER_PROMPT = (
-    "Incoming translated call.\n"
-    "Caller language detected: {caller_language}.\n"
-    "Your selected language: {agent_language}.\n"
-    "Live translation is active."
-)
+AGENT_WHISPER_TEMPLATES = {
+    "en": "Incoming translated call. Caller language: {caller_language}. Your language: {agent_language}. Live translation is active.",
+    "es": "Llamada traducida entrante. Idioma del llamante: {caller_language}. Su idioma: {agent_language}. Traducción en vivo activa.",
+    "fr": "Appel traduit entrant. Langue de l'appelant : {caller_language}. Votre langue : {agent_language}. Traduction en direct active.",
+    "it": "Chiamata tradotta in arrivo. Lingua del chiamante: {caller_language}. La tua lingua: {agent_language}. Traduzione in diretta attiva.",
+    "de": "Eingehender übersetzter Anruf. Sprache des Anrufers: {caller_language}. Ihre Sprache: {agent_language}. Live-Übersetzung ist aktiv.",
+    "ro": "Apel tradus în curs. Limba apelantului: {caller_language}. Limba dumneavoastră: {agent_language}. Traducerea în timp real este activă.",
+    "he": "שיחה מתורגמת נכנסת. שפת המתקשר: {caller_language}. השפה שלך: {agent_language}. תרגום חי פעיל.",
+}
+
+LANGUAGE_DISPLAY_NAMES = {
+    "en": {"en": "English", "es": "Spanish", "fr": "French", "it": "Italian", "de": "German", "ro": "Romanian", "he": "Hebrew"},
+    "es": {"en": "Inglés", "es": "Español", "fr": "Francés", "it": "Italiano", "de": "Alemán", "ro": "Rumano", "he": "Hebreo"},
+    "fr": {"en": "Anglais", "es": "Espagnol", "fr": "Français", "it": "Italien", "de": "Allemand", "ro": "Roumain", "he": "Hébreu"},
+    "it": {"en": "Inglese", "es": "Spagnolo", "fr": "Francese", "it": "Italiano", "de": "Tedesco", "ro": "Rumeno", "he": "Ebraico"},
+    "de": {"en": "Englisch", "es": "Spanisch", "fr": "Französisch", "it": "Italienisch", "de": "Deutsch", "ro": "Rumänisch", "he": "Hebräisch"},
+    "ro": {"en": "Engleză", "es": "Spaniolă", "fr": "Franceză", "it": "Italiană", "de": "Germană", "ro": "Română", "he": "Ebraică"},
+    "he": {"en": "אנגלית", "es": "ספרדית", "fr": "צרפתית", "it": "איטלקית", "de": "גרמנית", "ro": "רומנית", "he": "עברית"},
+}
 
 TOP_SECRET_MODE_PRIMARY_SCRIPT = """[low]
 Access anomaly detected...
@@ -756,6 +772,22 @@ class ARIClient:
             "callerId": caller_id,
         })
 
+    async def originate_to_dialplan(
+        self,
+        endpoint: str,
+        context: str,
+        extension: str,
+        priority: int = 1,
+        caller_id: str | None = None,
+    ) -> dict:
+        payload = {"endpoint": endpoint, "context": context, "extension": extension, "priority": priority}
+        if caller_id:
+            payload["callerId"] = caller_id
+        result = await self.post("/channels", json=payload)
+        if not result:
+            raise RuntimeError(f"ARI originate failed for endpoint {endpoint}")
+        return result
+
     async def snoop_channel(
         self, channel_id: str, app: str, spy: str = "in", whisper: str = "none"
     ) -> dict | None:
@@ -811,6 +843,7 @@ class CallHandler:
         self.handoff_active: bool = False
         self.selected_agent: AgentRoute | None = None
         self.selected_agent_profile_id: str = ""
+        self.agent_leg_channel_id: str = ""
         self.agent_media_session: AgentMediaSession | None = None
         self.translation_task: asyncio.Task | None = None
 
@@ -838,6 +871,7 @@ class CallHandler:
                     async with AsyncSessionLocal() as db:
                         call_log = CallLog(
                             call_id=self.call_id,
+                            direction="inbound",
                             caller_id=self.caller_id,
                             called_number=self.called_number,
                             started_at=self.started_at,
@@ -1602,6 +1636,29 @@ class CallHandler:
         await self._speak(f"Your agent status is now {spoken_state}.", language="en")
         self.call_path.record("agent_state_changed", extension=extension, availability_state=new_state)
 
+    async def _release_selected_agent(self):
+        if self.translation_task and not self.translation_task.done():
+            self.translation_task.cancel()
+            try:
+                await self.translation_task
+            except Exception:
+                pass
+            self.translation_task = None
+        if not self.selected_agent_profile_id:
+            return
+        try:
+            async with AsyncSessionLocal() as db:
+                await release_agent_from_call(db, self.selected_agent_profile_id, self.call_id)
+        except Exception as e:
+            log.warning("Failed to release agent from busy state",
+                        agent_id=self.selected_agent_profile_id, error=str(e))
+        finally:
+            if self.agent_leg_channel_id:
+                _active_agent_legs.pop(self.agent_leg_channel_id, None)
+            self.selected_agent_profile_id = ""
+            self.agent_leg_channel_id = ""
+            self.handoff_active = False
+
     async def _speak_to_media_session(self, session: AgentMediaSession, text: str, language: str = "en", voice_override: str = ""):
         loop = asyncio.get_event_loop()
         pcm = await loop.run_in_executor(None, synthesize_pcm, text, language, voice_override)
@@ -1668,37 +1725,40 @@ class CallHandler:
         finally:
             _pending_agent_legs.pop(token, None)
 
+        self.agent_leg_channel_id = leg["channel_id"]
+        _active_agent_legs[self.agent_leg_channel_id] = self
         session = await self._create_media_session_for_channel(leg["channel_id"], label=f"agent-{route.extension}")
         if route.translation_required:
-            whisper_en = AGENT_WHISPER_PROMPT.format(
-                caller_language=LANGUAGE_NAMES.get(caller_lang, caller_lang),
-                agent_language=LANGUAGE_NAMES.get(route.preferred_language, route.preferred_language),
+            whisper_lang = route.preferred_language if route.preferred_language in AGENT_WHISPER_TEMPLATES else "en"
+            language_names = LANGUAGE_DISPLAY_NAMES.get(whisper_lang, LANGUAGE_DISPLAY_NAMES["en"])
+            whisper_text = AGENT_WHISPER_TEMPLATES[whisper_lang].format(
+                caller_language=language_names.get(caller_lang, LANGUAGE_NAMES.get(caller_lang, caller_lang)),
+                agent_language=language_names.get(route.preferred_language, LANGUAGE_NAMES.get(route.preferred_language, route.preferred_language)),
             )
-            whisper_text = whisper_en
-            if route.preferred_language != "en":
-                whisper_text = await translate_text(whisper_en, route.preferred_language, source_lang="en")
-            await self._speak_to_media_session(session, whisper_text, language=route.preferred_language)
+            try:
+                await self._speak_to_media_session(session, whisper_text, language=whisper_lang)
+            except Exception as e:
+                log.warning(
+                    "Agent whisper failed; continuing with bridge",
+                    call_id=self.call_id,
+                    extension=route.extension,
+                    agent_language=whisper_lang,
+                    error=str(e),
+                )
         return session
 
     async def _select_agent_route(self, requested_queue: str | None, caller_lang: str) -> AgentRoute:
         async with AsyncSessionLocal() as db:
-            selected = await find_available_agent(
+            # Agent claim always wins; keyword routing is only consulted if no agent was claimed.
+            selected = await claim_agent_for_call(
                 db,
                 caller_lang=caller_lang,
+                call_id=self.call_id,
                 requested_queue=requested_queue,
             )
             if selected and selected.agent_id:
-                reserved = await reserve_agent_for_call(db, selected.agent_id, self.call_id)
-                if reserved:
-                    self.selected_agent_profile_id = reserved.agent_id
-                    selected.display_name = reserved.display_name
-                    selected.preferred_language = reserved.preferred_language or selected.preferred_language
-                    selected.supported_languages = [
-                        item for item in (reserved.supported_languages or "").split(",") if item
-                    ] or selected.supported_languages
-                    selected.translation_required = selected.preferred_language != caller_lang
-                    return selected
-
+                self.selected_agent_profile_id = selected.agent_id
+                return selected
             fallback = await get_route_for_intent(requested_queue, "transfer", db)
             return AgentRoute(
                 agent_id="",
@@ -1724,10 +1784,16 @@ class CallHandler:
         self.state.department = requested_queue or self.state.department
 
         if route.translation_required:
-            caller_prompt = AGENT_CALLER_TRANSLATION_PROMPT
-            if caller_lang != "en":
-                caller_prompt = await localize_for_caller(AGENT_CALLER_TRANSLATION_PROMPT, caller_lang)
-            await self._speak(caller_prompt, language=caller_lang)
+            caller_prompt = AGENT_CALLER_TRANSLATION_PROMPTS.get(caller_lang, AGENT_CALLER_TRANSLATION_PROMPTS["en"])
+            try:
+                await self._speak(caller_prompt, language=caller_lang)
+            except Exception as e:
+                log.warning(
+                    "Caller translation prompt failed; continuing with bridge",
+                    call_id=self.call_id,
+                    caller_language=caller_lang,
+                    error=str(e),
+                )
         else:
             connecting = {
                 "en": "One moment. Connecting you to an available agent now.",
@@ -1743,13 +1809,7 @@ class CallHandler:
             session = await self._dial_agent_leg(route, caller_lang)
         except Exception as e:
             log.warning("Agent leg setup failed", extension=route.extension, error=str(e))
-            if self.selected_agent_profile_id:
-                try:
-                    async with AsyncSessionLocal() as db:
-                        await release_agent_from_call(db, self.selected_agent_profile_id, self.call_id)
-                except Exception:
-                    pass
-                self.selected_agent_profile_id = ""
+            await self._release_selected_agent()
             unavailable = {
                 "en": "No agents are available right now. I can help you schedule a callback instead.",
                 "es": "No hay agentes disponibles ahora mismo. Puedo ayudarle a programar una devolución de llamada.",
@@ -1766,6 +1826,7 @@ class CallHandler:
         if route.translation_required:
             self.translation_task = asyncio.create_task(
                 TranslationRelay(
+                    call_id=self.call_id,
                     caller_sock=self.rtp_sock,
                     agent_sock=session.rtp_sock,
                     caller_lang=caller_lang,
@@ -2390,6 +2451,7 @@ class CallHandler:
                 try:
                     cl = CallLog(
                         call_id=self.call_id,
+                        direction="inbound",
                         caller_id=self.caller_id,
                         called_number=self.called_number,
                         started_at=self.started_at,
@@ -2404,13 +2466,7 @@ class CallHandler:
                     log.error("_teardown: fallback CallLog insert failed",
                               call_id=self.call_id, error=str(_e))
 
-        if self.selected_agent_profile_id:
-            try:
-                async with AsyncSessionLocal() as db:
-                    await release_agent_from_call(db, self.selected_agent_profile_id, self.call_id)
-            except Exception as e:
-                log.warning("Failed to release agent from busy state",
-                            agent_id=self.selected_agent_profile_id, error=str(e))
+        await self._release_selected_agent()
 
         if self.agent_media_session:
             try:
@@ -2448,6 +2504,12 @@ class CallHandler:
 
 _port_pool: set[int] = set()
 _port_lock = asyncio.Lock()
+_active_agent_legs: dict[str, "CallHandler"] = {}
+_shared_ari_client: "ARIClient | None" = None
+
+
+def get_shared_ari_client() -> "ARIClient | None":
+    return _shared_ari_client
 
 
 def _allocate_rtp_port() -> int:
@@ -2480,8 +2542,10 @@ async def run_ari_agent():
     Each call spawns a CallHandler in its own asyncio task.
     v1.2: also routes ChannelDtmfReceived events into per-call DTMF queues.
     """
+    global _shared_ari_client
     ari = ARIClient()
     await ari.start()
+    _shared_ari_client = ari
 
     ws_url = (
         f"ws://{settings.asterisk_host}:{settings.asterisk_ari_port}"
@@ -2494,116 +2558,124 @@ async def run_ari_agent():
 
     log.info("Connecting to Asterisk ARI", url=ws_url)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(ws_url) as ws:
-            log.info("ARI WebSocket connected")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(ws_url) as ws:
+                log.info("ARI WebSocket connected")
 
-            async for msg in ws:
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    continue
+                async for msg in ws:
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        continue
 
-                event = json.loads(msg.data)
-                event_type = event.get("type")
+                    event = json.loads(msg.data)
+                    event_type = event.get("type")
 
-                if event_type == "StasisStart":
-                    channel = event["channel"]
-                    channel_id = channel["id"]
-                    channel_name = channel.get("name", "")
-                    caller_id = channel.get("caller", {}).get("number", "unknown")
-                    args = event.get("args", [])
-                    called_number = args[1] if len(args) > 1 else "unknown"
+                    if event_type == "StasisStart":
+                        channel = event["channel"]
+                        channel_id = channel["id"]
+                        channel_name = channel.get("name", "")
+                        caller_id = channel.get("caller", {}).get("number", "unknown")
+                        args = event.get("args", [])
+                        called_number = args[1] if len(args) > 1 else "unknown"
 
-                    if args and args[0] == "agent-leg":
-                        token = args[1] if len(args) > 1 else ""
-                        future = _pending_agent_legs.pop(token, None)
-                        if future and not future.done():
-                            future.set_result({
-                                "channel_id": channel_id,
-                                "channel_name": channel_name,
-                                "caller_id": caller_id,
-                            })
-                            log.info("Outbound agent leg entered Stasis",
-                                     channel_id=channel_id,
-                                     extension=caller_id,
-                                     token=token[:8])
+                        if args and args[0] == "agent-leg":
+                            token = args[1] if len(args) > 1 else ""
+                            future = _pending_agent_legs.pop(token, None)
+                            if future and not future.done():
+                                future.set_result({
+                                    "channel_id": channel_id,
+                                    "channel_name": channel_name,
+                                    "caller_id": caller_id,
+                                })
+                                log.info("Outbound agent leg entered Stasis",
+                                         channel_id=channel_id,
+                                         extension=caller_id,
+                                         token=token[:8])
+                            else:
+                                log.warning("Agent leg arrived without pending future",
+                                            channel_id=channel_id, token=token[:8])
+                            continue
+
+                        # ExternalMedia channels also enter the same Stasis app.
+                        # They are transport legs, not new inbound calls.
+                        if channel_name.startswith("UnicastRTP/"):
+                            log.debug("Ignoring ExternalMedia StasisStart",
+                                      channel_id=channel_id, channel_name=channel_name)
+                            continue
+
+                        log.info("StasisStart", channel_id=channel_id, caller=caller_id)
+
+                        dtmf_queue: asyncio.Queue = asyncio.Queue()
+                        handler = CallHandler(ari, channel_id, caller_id, called_number, dtmf_queue)
+                        task = asyncio.create_task(handler.run())
+                        active_calls[channel_id] = (handler, task)
+                        # Yield to the event loop so the CallHandler task starts
+                        # executing immediately. Without this, the ws receive loop
+                        # holds the event loop and the handler task stays frozen
+                        # until the next WebSocket message arrives — which may be
+                        # ChannelHangupRequest, cancelling the task before it ran
+                        # a single line.
+                        await asyncio.sleep(0)
+
+                    elif event_type == "ChannelDtmfReceived":
+                        # Route DTMF digit to the correct call's handler
+                        channel_id = event.get("channel", {}).get("id")
+                        digit = event.get("digit", "")
+                        if channel_id in active_calls and digit:
+                            handler, _ = active_calls[channel_id]
+                            await handler.dtmf_queue.put(digit)
+                            log.info("DTMF received", channel_id=channel_id, digit=digit)
+
+                    elif event_type == "StasisEnd":
+                        channel_id = event.get("channel", {}).get("id")
+                        # StasisEnd fires when a channel leaves the Stasis application
+                        # context — this includes the normal case where the caller
+                        # channel is moved into a mixing bridge via add_to_bridge().
+                        # Cancelling the handler here kills the call mid-setup.
+                        #
+                        # We log it but do NOT cancel the task or remove from
+                        # active_calls here. Actual call teardown is driven by
+                        # ChannelDestroyed (caller physically hung up) or by the
+                        # CallHandler itself completing/erroring.
+                        if channel_id in active_calls:
+                            handler, _ = active_calls[channel_id]
+                            log.info("StasisEnd — channel left Stasis context (bridge transition or hangup)",
+                                     channel_id=channel_id, call_id=handler.call_id)
                         else:
-                            log.warning("Agent leg arrived without pending future",
-                                        channel_id=channel_id, token=token[:8])
-                        continue
+                            log.debug("StasisEnd for untracked channel (ExternalMedia/relay/snoop)",
+                                      channel_id=channel_id)
 
-                    # ExternalMedia channels also enter the same Stasis app.
-                    # They are transport legs, not new inbound calls.
-                    if channel_name.startswith("UnicastRTP/"):
-                        log.debug("Ignoring ExternalMedia StasisStart",
-                                  channel_id=channel_id, channel_name=channel_name)
-                        continue
+                    elif event_type == "ChannelDestroyed":
+                        # ChannelDestroyed is the authoritative signal that the caller
+                        # has physically hung up and the channel is gone. This is the
+                        # correct place to cancel the call handler.
+                        channel_id = event.get("channel", {}).get("id")
+                        if channel_id in active_calls:
+                            handler, task = active_calls.pop(channel_id)
+                            task.cancel()
+                            log.info("ChannelDestroyed — cancelling call handler",
+                                     channel_id=channel_id, call_id=handler.call_id)
+                        elif channel_id in _active_agent_legs:
+                            handler = _active_agent_legs.pop(channel_id)
+                            log.info("ChannelDestroyed — releasing claimed agent leg",
+                                     channel_id=channel_id, call_id=handler.call_id)
+                            await handler._release_selected_agent()
 
-                    log.info("StasisStart", channel_id=channel_id, caller=caller_id)
+                    elif event_type == "ChannelHangupRequest":
+                        # ChannelHangupRequest fires when the far end sends BYE but
+                        # the channel is not yet destroyed. Do NOT cancel the handler
+                        # here — ChannelDestroyed is the authoritative signal and will
+                        # follow shortly. Cancelling here races against handler startup
+                        # and can kill the call silently before media setup begins.
+                        channel_id = event.get("channel", {}).get("id")
+                        if channel_id in active_calls:
+                            handler, _ = active_calls[channel_id]
+                            log.info("ChannelHangupRequest — noting hangup, awaiting ChannelDestroyed",
+                                     channel_id=channel_id, call_id=handler.call_id)
 
-                    dtmf_queue: asyncio.Queue = asyncio.Queue()
-                    handler = CallHandler(ari, channel_id, caller_id, called_number, dtmf_queue)
-                    task = asyncio.create_task(handler.run())
-                    active_calls[channel_id] = (handler, task)
-                    # Yield to the event loop so the CallHandler task starts
-                    # executing immediately. Without this, the ws receive loop
-                    # holds the event loop and the handler task stays frozen
-                    # until the next WebSocket message arrives — which may be
-                    # ChannelHangupRequest, cancelling the task before it ran
-                    # a single line.
-                    await asyncio.sleep(0)
-
-                elif event_type == "ChannelDtmfReceived":
-                    # Route DTMF digit to the correct call's handler
-                    channel_id = event.get("channel", {}).get("id")
-                    digit = event.get("digit", "")
-                    if channel_id in active_calls and digit:
-                        handler, _ = active_calls[channel_id]
-                        await handler.dtmf_queue.put(digit)
-                        log.info("DTMF received", channel_id=channel_id, digit=digit)
-
-                elif event_type == "StasisEnd":
-                    channel_id = event.get("channel", {}).get("id")
-                    # StasisEnd fires when a channel leaves the Stasis application
-                    # context — this includes the normal case where the caller
-                    # channel is moved into a mixing bridge via add_to_bridge().
-                    # Cancelling the handler here kills the call mid-setup.
-                    #
-                    # We log it but do NOT cancel the task or remove from
-                    # active_calls here. Actual call teardown is driven by
-                    # ChannelDestroyed (caller physically hung up) or by the
-                    # CallHandler itself completing/erroring.
-                    if channel_id in active_calls:
-                        handler, _ = active_calls[channel_id]
-                        log.info("StasisEnd — channel left Stasis context (bridge transition or hangup)",
-                                 channel_id=channel_id, call_id=handler.call_id)
-                    else:
-                        log.debug("StasisEnd for untracked channel (ExternalMedia/relay/snoop)",
-                                  channel_id=channel_id)
-
-                elif event_type == "ChannelDestroyed":
-                    # ChannelDestroyed is the authoritative signal that the caller
-                    # has physically hung up and the channel is gone. This is the
-                    # correct place to cancel the call handler.
-                    channel_id = event.get("channel", {}).get("id")
-                    if channel_id in active_calls:
-                        handler, task = active_calls.pop(channel_id)
-                        task.cancel()
-                        log.info("ChannelDestroyed — cancelling call handler",
-                                 channel_id=channel_id, call_id=handler.call_id)
-
-                elif event_type == "ChannelHangupRequest":
-                    # ChannelHangupRequest fires when the far end sends BYE but
-                    # the channel is not yet destroyed. Do NOT cancel the handler
-                    # here — ChannelDestroyed is the authoritative signal and will
-                    # follow shortly. Cancelling here races against handler startup
-                    # and can kill the call silently before media setup begins.
-                    channel_id = event.get("channel", {}).get("id")
-                    if channel_id in active_calls:
-                        handler, _ = active_calls[channel_id]
-                        log.info("ChannelHangupRequest — noting hangup, awaiting ChannelDestroyed",
-                                 channel_id=channel_id, call_id=handler.call_id)
-
-    await ari.stop()
+    finally:
+        _shared_ari_client = None
+        await ari.stop()
 
 
 # ── Translation Relay ─────────────────────────────────────────────────────────
@@ -2620,16 +2692,24 @@ class TranslationRelay:
     def __init__(
         self,
         *,
+        call_id: str,
         caller_sock: RTPSocket,
         agent_sock: RTPSocket,
         caller_lang: str,
         agent_lang: str = "en",
     ):
+        self.call_id = call_id
         self.caller_sock = caller_sock
         self.agent_sock = agent_sock
         self.caller_lang = caller_lang
         self.agent_lang = agent_lang
         self._running = True
+        self._started_at = time.monotonic()
+        self._last_activity = self._started_at
+        self._stall_warned_at = 0.0
+        self._stall_errored_at = 0.0
+        self._caller_to_agent_failures = 0
+        self._agent_to_caller_failures = 0
 
     async def run(self):
         log.info("TranslationRelay starting", caller_lang=self.caller_lang, agent_lang=self.agent_lang)
@@ -2649,12 +2729,48 @@ class TranslationRelay:
                     output_sock=self.caller_sock,
                     label="agent→caller",
                 ),
+                self._watchdog(),
             )
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
             log.error("TranslationRelay.run error", error=str(e), exc_info=True)
+        finally:
+            duration = time.monotonic() - self._started_at
+            log.info(
+                "TranslationRelay stopped",
+                call_id=self.call_id,
+                caller_language=self.caller_lang,
+                agent_language=self.agent_lang,
+                duration_seconds=round(duration, 2),
+                caller_to_agent_failures=self._caller_to_agent_failures,
+                agent_to_caller_failures=self._agent_to_caller_failures,
+            )
+
+    async def _watchdog(self):
+        while self._running:
+            await asyncio.sleep(10)
+            idle = time.monotonic() - self._last_activity
+            if idle < 30:
+                self._stall_warned_at = 0.0
+                self._stall_errored_at = 0.0
+            elif idle >= 60 and self._stall_errored_at == 0.0:
+                self._stall_errored_at = time.monotonic()
+                log.error(
+                    "TranslationRelay audio stalled >60s",
+                    caller_language=self.caller_lang,
+                    agent_language=self.agent_lang,
+                    idle_seconds=int(idle),
+                )
+            elif idle >= 30 and self._stall_warned_at == 0.0:
+                self._stall_warned_at = time.monotonic()
+                log.warning(
+                    "TranslationRelay audio stalled",
+                    caller_language=self.caller_lang,
+                    agent_language=self.agent_lang,
+                    idle_seconds=int(idle),
+                )
 
     async def _translate_loop(self, sock, src_lang, tgt_lang, output_sock, label):
         from llm.translate_engine import translate as do_translate
@@ -2682,6 +2798,7 @@ class TranslationRelay:
                         None, lambda: _recv_nonblocking(sock.sock, 2048)
                     )
                     if data and len(data) > RTP_HEADER_SIZE:
+                        self._last_activity = time.monotonic()
                         payload = _ulaw_8k_to_pcm16_16k(data[RTP_HEADER_SIZE:])
                         no_data_count = 0
                         vad_event = vad.process_chunk(payload)
@@ -2719,6 +2836,10 @@ class TranslationRelay:
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                if label == "caller→agent":
+                    self._caller_to_agent_failures += 1
+                else:
+                    self._agent_to_caller_failures += 1
                 log.error("TranslationRelay._translate_loop error", direction=label, error=str(e))
                 await asyncio.sleep(0.5)
 

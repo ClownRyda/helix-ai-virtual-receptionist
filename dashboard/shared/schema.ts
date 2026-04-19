@@ -4,7 +4,9 @@
 export interface CallLog {
   id: number;
   call_id: string;
+  direction: "inbound" | "outbound";
   caller_id: string;
+  called_number: string;
   started_at: string | null;
   ended_at: string | null;
   duration_seconds: number | null;
@@ -16,6 +18,34 @@ export interface CallLog {
   appointment_id?: string | null;
   notes?: string | null;
   summary?: string | null;
+}
+
+export type CampaignStatus = "draft" | "active" | "paused" | "completed" | "archived";
+
+export interface Campaign {
+  id: number;
+  campaign_id: string;
+  name: string;
+  description: string;
+  status: CampaignStatus;
+  caller_id: string;
+  script: string;
+  target_list: string[];
+  calls_attempted: number;
+  calls_connected: number;
+  calls_failed: number;
+  created_at: string | null;
+  updated_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface OutboundTestCallResult {
+  channel_id: string;
+  call_log_id: number;
+  call_id: string;
+  destination: string;
+  context: string;
 }
 
 export interface CallStats {

@@ -3,7 +3,7 @@ Database models and setup — call logs, appointments, routing rules,
 holidays, voicemail messages, and human-agent presence state.
 """
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, DateTime, Date, Text, Boolean, Float
+from sqlalchemy import Column, Integer, String, DateTime, Date, Text, Boolean, Float, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config import settings
@@ -18,6 +18,7 @@ class CallLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     call_id = Column(String(64), unique=True, index=True)
+    direction = Column(String(16), default="inbound", index=True, nullable=False)
     caller_id = Column(String(32))
     called_number = Column(String(32))
     started_at = Column(DateTime, default=datetime.utcnow)
@@ -114,12 +115,44 @@ class AgentProfile(Base):
     assigned_queues = Column(Text, default="")
     current_call_id = Column(String(64), nullable=True)
     last_offered_at = Column(DateTime, nullable=True)
+    state_changed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Campaign(Base):
+    __tablename__ = "campaigns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(String(64), unique=True, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, default="")
+    status = Column(String(16), default="draft", index=True)
+    caller_id = Column(String(32), default="")
+    script = Column(Text, default="")
+    target_list = Column(Text, default="[]")
+    calls_attempted = Column(Integer, default=0)
+    calls_connected = Column(Integer, default=0)
+    calls_failed = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
 
 
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if settings.database_url.startswith("sqlite"):
+            result = await conn.execute(text("PRAGMA table_info(call_logs)"))
+            call_log_columns = {row[1] for row in result.fetchall()}
+            if "direction" not in call_log_columns:
+                await conn.execute(text("ALTER TABLE call_logs ADD COLUMN direction VARCHAR(16) NOT NULL DEFAULT 'inbound'"))
+            await conn.execute(text("UPDATE call_logs SET direction='inbound' WHERE direction IS NULL OR direction = ''"))
+
+            result = await conn.execute(text("PRAGMA table_info(agent_profiles)"))
+            columns = {row[1] for row in result.fetchall()}
+            if "state_changed_at" not in columns:
+                await conn.execute(text("ALTER TABLE agent_profiles ADD COLUMN state_changed_at DATETIME"))
 
     # Seed default routing rules if empty
     async with AsyncSessionLocal() as session:

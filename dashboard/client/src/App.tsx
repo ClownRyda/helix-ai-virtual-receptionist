@@ -12,6 +12,8 @@ import Appointments from "@/pages/Appointments";
 import Settings from "@/pages/Settings";
 import Voicemails from "@/pages/Voicemails";
 import Agents from "@/pages/Agents";
+import Campaigns from "@/pages/Campaigns";
+import OutboundCalls from "@/pages/OutboundCalls";
 
 export default function App() {
   return (
@@ -27,6 +29,8 @@ export default function App() {
               <Route path="/calls/:callId" component={CallDetail} />
               <Route path="/routing" component={Routing} />
               <Route path="/agents" component={Agents} />
+              <Route path="/campaigns" component={Campaigns} />
+              <Route path="/outbound-calls" component={OutboundCalls} />
               <Route path="/appointments" component={Appointments} />
               <Route path="/voicemails" component={Voicemails} />
               <Route path="/settings" component={Settings} />

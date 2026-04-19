@@ -1,17 +1,19 @@
 # Helix AI Virtual Receptionist
 
-![Version](https://img.shields.io/badge/version-v1.8.0-cyan)
+![Version](https://img.shields.io/badge/version-v1.9.0-cyan)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![Asterisk](https://img.shields.io/badge/asterisk-20+-orange)
 ![Ollama](https://img.shields.io/badge/LLM-ollama%20local-purple)
 ![Stars](https://img.shields.io/github/stars/BB-AI-Arena/helix-ai-virtual-receptionist?style=flat)
 
-**A fully local, self-hosted AI phone receptionist — no cloud APIs, no subscriptions, no vendor lock-in.**
+Helix is a production-ready, self-hosted AI voice receptionist and multilingual contact-center front door for businesses that want modern call handling without handing their phone traffic to the cloud. It answers inbound calls, detects caller language, carries natural voice conversations, handles business-hours and after-hours flows, schedules callbacks, routes to live human agents, and activates real-time translation automatically when caller and agent speak different languages.
 
-Helix answers calls 24/7, detects intent in natural conversation, speaks 7 languages, schedules callbacks via Google Calendar, routes callers to the right person, and live-translates across language barriers during transfers — all on your own hardware.
+Built for operators who care about control, privacy, and reliability, Helix runs on your own infrastructure with Asterisk ARI, Ollama, Whisper, Kokoro TTS, FastAPI, and a live dashboard. No subscriptions. No per-minute API billing. No external speech or LLM provider required.
 
-> **Proven working on bare-metal Ubuntu 24.04 with an RTX 4090. Remote callers on WAN (Zoiper on mobile data) can hear the AI greeting and have a full conversation.**
+**Deployment target:** bare-metal Ubuntu production, with Docker/Desktop support for testing and development  
+**Runtime profile:** fully local voice AI, live agent routing, multilingual translation bridging, Google Calendar scheduling  
+**Operating model:** your hardware, your SIP stack, your data
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
 
@@ -19,41 +21,43 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history · [Contributing](.git
 
 ## What It Does
 
+Helix acts as the intelligent first point of contact for your business phone line. It answers inbound calls, determines what the caller needs, adapts to language automatically, and either resolves the request directly or hands the call to the right human agent with as little friction as possible.
+
 ```
 Caller dials in
       ↓
-VIP caller? → direct to operator (no AI)
+VIP / priority caller? → direct to operator (no AI delay)
       ↓
-Business hours / holiday check
-  ├── Open  → normal AI greeting
-  └── Closed → after-hours message
-           ├── callback  → speak hours, say goodbye
+Business hours / holiday policy check
+  ├── Open → normal AI conversation flow
+  └── Closed → after-hours handling
+           ├── callback  → explain hours, offer next step
            ├── voicemail → record + transcribe message
            ├── schedule  → book callback via Calendar
-           └── emergency → transfer to emergency ext
+           └── emergency → transfer to emergency extension
       ↓
-AI greets caller in English
+AI greets caller
       ↓
 Whisper detects language (EN, ES, FR, IT, DE, RO, HE)
-If non-English detected → greeting replays in caller's language
+Greeting and prompts adapt to caller language
       ↓
-DTMF menu announced (if enabled) — press 1/2/0 or just speak
+DTMF fallback announced if enabled — or just speak naturally
       ↓
-Llama 3.1 determines intent
+LLM determines intent and next action
       ↓
    ┌──────────────┬──────────────────────┐
    ▼              ▼                      ▼
-Schedule      Transfer              Answer info
+Schedule      Route to human        Answer directly
    │              │                      │
-Calendar      Route to ext         Kokoro TTS reply
-books slot    (DB rules)           in caller's lang
+Calendar      Claim best agent     Kokoro TTS reply
+books slot    / extension          in caller's language
                    │
           caller_lang ≠ agent_lang?
           TranslationRelay starts
           (both parties hear own language)
       ↓
-On silence or confusion → retry prompts → operator fallback
-Structured call-path log written to database
+If unclear → retry prompts → operator / fallback path
+Structured call-path event log written to database
 Optional: LLM call summary saved
 ```
 
@@ -61,26 +65,30 @@ Optional: LLM call summary saved
 
 ## Architecture
 
+The production stack is intentionally simple: Asterisk handles SIP and media control, the Python agent handles intelligence and orchestration, and the dashboard exposes operational visibility and configuration. The entire system is designed to run locally, with the AI, telephony, routing, and agent state all inside your own environment.
+
 ```
 Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
                          │
-              ARI WebSocket + ExternalMedia RTP
+              ARI control + ExternalMedia RTP
                          │
                          ▼
                Python Agent (FastAPI :8000)
-               ├── Business hours / holiday gate
+               ├── Business hours / holiday logic
                ├── VIP caller bypass
                ├── SileroVAD              voice activity detection
-               ├── faster-whisper         speech → text (GPU)
-               ├── Ollama llama3.1:8b     intent + conversation + FAQ
-               ├── translate_engine       EN ↔ ES via Ollama (local)
-               ├── Kokoro TTS             text → speech (EN/ES/FR/IT) + espeak-ng (DE/RO/HE)
-               ├── Google Calendar        scheduling
-               ├── SQLite                 call logs + routing rules + holidays + voicemail
+               ├── faster-whisper         speech → text
+               ├── Ollama llama3.1:8b     intent, conversation, FAQ, translation control
+               ├── translate_engine       multilingual live relay support
+               ├── Kokoro TTS             neural speech output
+               ├── Google Calendar        callback scheduling
+               ├── SQLite                 calls, routing, holidays, voicemail, agents
                └── CallPath logger        structured per-call event log
                          │
                     REST API
                          │
+               React Dashboard (:3001 → nginx :80)
+               call logs · routing · appointments · holidays · voicemails · settings · agents
                React Dashboard (:3001 → nginx :80)
                call logs · routing · appointments · holidays · voicemails · settings · agents
 ```
@@ -103,21 +111,21 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
 - TTS voices: Kokoro neural voices for EN/ES/FR/IT — espeak-ng for DE/RO/HE
 
 ### Live translation relay (during transfers)
-After a call is transferred to a live person, if the caller and agent speak different languages, a **TranslationRelay** starts automatically — both parties just speak normally:
+After a call is transferred to a live person, if the caller and the agent speak different languages, a **TranslationRelay** starts automatically on the live agent leg — both parties just speak normally:
 
 ```
-Caller (ES) ──speaks──▶ caller_snoop channel
+Caller (ES) ──speaks──▶ caller media leg
                               │ Whisper ES → translate ES→EN → Kokoro EN
                               ▼
                       Agent hears English
 
-Agent (EN) ──speaks──▶ agent_snoop channel
+Agent (EN) ──speaks──▶ agent media leg
                               │ Whisper EN → translate EN→ES → Kokoro ES
                               ▼
                       Caller hears Spanish
 ```
 
-Two isolated snoop channels prevent audio mixing. Relay only starts when `caller_lang ≠ agent_lang` — same-language transfers have zero overhead.
+Two isolated media legs prevent audio mixing. Relay only starts when `caller_lang ≠ agent_lang` — same-language transfers have zero overhead.
 
 ### Retry / fallback logic
 - Silence → localized retry prompt in caller's language ("I didn't catch that…" in all 7 languages)
@@ -156,6 +164,76 @@ All three flags are off by default and degrade gracefully when disabled.
 | `VOICEMAIL_ENABLED` | Records after-hours messages as WAV; optional Whisper transcription; stored in DB |
 | `CALL_SUMMARY_ENABLED` | LLM writes a 2-3 sentence post-call summary into `CallLog.summary` |
 | `FAQ_ENABLED` | Keyword-matches caller utterances against `FAQ_FILE` (plain text); matching lines injected into LLM context |
+
+---
+
+## Agent System
+
+Helix includes a first-pass live human agent layer on top of the caller-side AI experience. Human agents can register in the dashboard or log in from their phone, select a preferred language, and make themselves available for inbound handoff. Inbound live-agent routing prefers queue match first, then language match, then longest-idle selection across the remaining available pool. If the caller and the selected agent speak different languages, live translation activates automatically on the agent leg.
+
+### Feature Code Reference
+
+| Code | Action | Notes |
+|---|---|---|
+| `*55` | Login + select language | Press `1=EN`, `2=ES`, `3=FR`, `4=IT`, `5=HE`, `6=RO` |
+| `*56` | Set state to break | |
+| `*57` | Set state to available | |
+| `*58` | Set state to offline | |
+
+### Agent Routing Flow
+
+```
+Inbound call
+      ↓
+Language detected (Whisper)
+      ↓
+claim_agent_for_call(caller_lang, queue)
+      ↓
+Atomic UPDATE: availability='available' AND current_call_id IS NULL
+      ↓
+┌─────────────┬─────────────────────┐
+▼             ▼                     ▼
+Preferred     Supported          Any available
+language      language           (translation
+match         match              bridge will
+                                 activate)
+      ↓
+Tie-break: longest-idle (last_offered_at ASC)
+      ↓
+Agent claimed → bridge to agent leg
+      ↓
+caller_lang ≠ agent_lang?
+├── Yes → TranslationRelay on agent leg
+│         (caller hears their lang, agent hears theirs)
+└── No  → Direct bridge, no relay overhead
+      ↓
+Call ends → release agent (current_call_id=null,
+           state=available, state_changed_at=now)
+```
+
+### State Lifecycle
+
+```
+     ┌──────────┐
+     │ offline  │
+     └────┬─────┘
+          │ *55 (login + language)
+          ▼
+     ┌──────────┐   *56    ┌──────────┐
+     │available │◄────────►│  break   │
+     └────┬─────┘   *57    └──────────┘
+          │
+          │ call claimed (atomic)
+          ▼
+     ┌──────────┐
+     │   busy   │
+     └────┬─────┘
+          │ call ends
+          ▼
+     back to available
+```
+
+Agent claim uses an optimistic conditional `UPDATE` guarded by `availability_state='available' AND current_call_id IS NULL`. Two concurrent inbound calls can never claim the same agent — the losing claim retries up to 3 times with a fresh candidate query before falling back.
 
 ---
 
@@ -368,6 +446,15 @@ cp agent/.env.example agent/.env
 | `GET` | `/api/voicemails/{id}` | Voicemail detail + transcript |
 | `PATCH` | `/api/voicemails/{id}` | Update voicemail status (unread/read/archived) |
 | `GET` | `/api/health` | Health check + version + feature flags + TTS engine |
+| `GET` | `/api/agents` | List all registered agents with state, language, queues |
+| `POST` | `/api/agents/register` | Register a new agent |
+| `PATCH` | `/api/agents/{agent_id}` | Update agent fields (language, queues, state) |
+| `DELETE` | `/api/agents/{agent_id}` | Remove an agent (409 if on active call) |
+| `GET` | `/api/health` | Health check + version + feature flags + TTS engine |
+| `GET` | `/api/agents` | List all registered agents with state, language, queues |
+| `POST` | `/api/agents/register` | Register a new agent |
+| `PATCH` | `/api/agents/{agent_id}` | Update agent fields (language, queues, state) |
+| `DELETE` | `/api/agents/{agent_id}` | Remove an agent (409 if on active call) |
 
 ---
 
@@ -424,6 +511,7 @@ Access at `http://YOUR_SERVER_IP` (nginx port 80 in production) or `http://local
 | Call Logs | Searchable call history with intent and disposition badges |
 | Call Detail | Full transcript + structured call-path events + LLM summary |
 | Routing | Keyword → extension rules with agent language (inline CRUD) |
+| Agents | Register agents, manage language/queue/state, see current call + last-offered data |
 | Appointments | Scheduled callbacks with Google Calendar status |
 | Voicemails | After-hours voicemail inbox with status badges, transcript, and archive actions |
 | Agents | Agent roster — extensions, languages, routing assignments |
@@ -464,7 +552,9 @@ Reload Asterisk after editing:
 sudo asterisk -rx "module reload res_pjsip.so"
 ```
 
-**`onboard.sh` (v1.8.0+) auto-detects your WAN IP and prompts you to confirm it before writing `pjsip.conf`.** For existing installs, edit `pjsip.conf` manually and reload.
+**`onboard.sh` (v1.9.0+) auto-detects your WAN IP and prompts you to confirm
+it before writing `pjsip.conf`.**  For existing installs, edit `pjsip.conf`
+manually and reload.
 
 ### Firewall
 ```bash

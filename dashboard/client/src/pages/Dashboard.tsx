@@ -5,10 +5,10 @@ import {
   Phone, ArrowRight, CalendarClock, ArrowLeftRight, PhoneOff,
   Clock, GitMerge, Mic, Cpu, Volume2, Globe, ShieldCheck,
   Hash, Voicemail, FileText, HelpCircle, Building2,
-  CheckCircle2, XCircle, AlertTriangle, CalendarX, UsersRound,
+  CheckCircle2, XCircle, AlertTriangle, CalendarX, UsersRound, Megaphone, PhoneOutgoing,
 } from "lucide-react";
 import { fetchJSON } from "@/lib/queryClient";
-import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, Holiday, HumanAgent } from "@shared/schema";
+import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, Holiday, HumanAgent, Campaign } from "@shared/schema";
 import DispositionBadge from "@/components/DispositionBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -119,6 +119,18 @@ export default function Dashboard() {
     refetchInterval: 15_000,
   });
 
+  const { data: campaigns } = useQuery<Campaign[]>({
+    queryKey: ["/api/campaigns"],
+    queryFn: () => fetchJSON("/api/campaigns"),
+    refetchInterval: 15_000,
+  });
+
+  const { data: outboundCalls } = useQuery<CallLog[]>({
+    queryKey: ["/api/calls", "outbound-home"],
+    queryFn: () => fetchJSON("/api/calls?direction=outbound&limit=100"),
+    refetchInterval: 15_000,
+  });
+
   const { data: holidays } = useQuery<Holiday[]>({
     queryKey: ["/api/holidays"],
     queryFn: () => fetchJSON("/api/holidays"),
@@ -150,6 +162,13 @@ export default function Dashboard() {
     .slice(0, 3) ?? [];
   const availableAgents = agents?.filter((agent) => agent.availability_state === "available") ?? [];
   const busyAgents = agents?.filter((agent) => agent.availability_state === "busy") ?? [];
+  const activeCampaigns = campaigns?.filter((campaign) => campaign.status === "active") ?? [];
+  const outboundToday = (outboundCalls ?? []).filter((call) => {
+    if (!call.started_at) return false;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return new Date(call.started_at) >= start;
+  }).length;
 
   // Build hourly label
   const hoursLabel = config
@@ -346,6 +365,45 @@ export default function Dashboard() {
           </div>
 
           {/* Agent pool snapshot */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Link href="/agents">
+              <a className="stat-card block hover:border-primary/30 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Agent Pool</span>
+                  <UsersRound size={13} className="text-primary" />
+                </div>
+                <div className="text-2xl font-bold text-foreground mono">{agents?.length ?? 0}</div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {availableAgents.length} available · {busyAgents.length} busy
+                </div>
+              </a>
+            </Link>
+            <Link href="/campaigns">
+              <a className="stat-card block hover:border-primary/30 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Active Campaigns</span>
+                  <Megaphone size={13} className="text-emerald-300" />
+                </div>
+                <div className="text-2xl font-bold text-foreground mono">{activeCampaigns.length}</div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {campaigns?.length ?? 0} total campaigns
+                </div>
+              </a>
+            </Link>
+            <Link href="/outbound-calls">
+              <a className="stat-card block hover:border-primary/30 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Outbound Today</span>
+                  <PhoneOutgoing size={13} className="text-sky-300" />
+                </div>
+                <div className="text-2xl font-bold text-foreground mono">{outboundToday}</div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {outboundCalls?.length ?? 0} logged outbound calls
+                </div>
+              </a>
+            </Link>
+          </div>
+
           <div className="bg-card border border-border rounded-lg overflow-hidden">
             <SectionHeader title="Agent Pool" linkHref="/agents" linkLabel="Manage" />
             {!agents?.length ? (

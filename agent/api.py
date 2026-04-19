@@ -16,8 +16,11 @@ from typing import Optional, Literal
 from datetime import datetime, date
 import os
 import re
+import json
+from uuid import uuid4
+import structlog
 
-from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, AgentProfile, get_db
+from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, AgentProfile, Campaign, get_db
 from routing.router import get_all_rules, upsert_rule
 from routing.agents import (
     list_agents as list_agent_profiles,
@@ -26,8 +29,10 @@ from routing.agents import (
 )
 from gcal.gcal import get_available_slots
 from config import settings
+from ari_agent import get_shared_ari_client
 
-app = FastAPI(title="Helix AI API", version="1.8.0")
+app = FastAPI(title="Helix AI API", version="1.9.0")
+log = structlog.get_logger(__name__)
 
 # Production: restrict to localhost. Set API_CORS_ORIGINS env var to
 # a comma-separated list of allowed origins if you need LAN access
@@ -109,19 +114,81 @@ class AgentStatePatch(BaseModel):
     assigned_queues: Optional[list[str]] = None
 
 
+class CampaignCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    caller_id: Optional[str] = ""
+    script: Optional[str] = ""
+    target_list: str
+
+
+class CampaignPatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    caller_id: Optional[str] = None
+    script: Optional[str] = None
+    target_list: Optional[str] = None
+    status: Optional[Literal["draft", "active", "paused", "completed", "archived"]] = None
+
+
+class OutboundTestCallBody(BaseModel):
+    destination: str
+    caller_id: Optional[str] = None
+    context: Optional[str] = "helix-outbound"
+
+
+def _parse_target_list(raw: str) -> list[str]:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"target_list must be valid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise HTTPException(status_code=400, detail="target_list must be a JSON array of strings")
+    return parsed
+
+
+def _campaign_payload(campaign: Campaign) -> dict:
+    return {
+        "id": campaign.id,
+        "campaign_id": campaign.campaign_id,
+        "name": campaign.name,
+        "description": campaign.description or "",
+        "status": campaign.status,
+        "caller_id": campaign.caller_id or "",
+        "script": campaign.script or "",
+        "target_list": json.loads(campaign.target_list or "[]"),
+        "calls_attempted": campaign.calls_attempted,
+        "calls_connected": campaign.calls_connected,
+        "calls_failed": campaign.calls_failed,
+        "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
+        "updated_at": campaign.updated_at.isoformat() if campaign.updated_at else None,
+        "started_at": campaign.started_at.isoformat() if campaign.started_at else None,
+        "completed_at": campaign.completed_at.isoformat() if campaign.completed_at else None,
+    }
+
+
 # ── Call logs ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/calls")
-async def list_calls(limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(CallLog).order_by(desc(CallLog.started_at)).limit(limit).offset(offset)
-    )
+async def list_calls(
+    limit: int = 50,
+    offset: int = 0,
+    direction: Optional[Literal["inbound", "outbound"]] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(CallLog)
+    if direction:
+        stmt = stmt.where(CallLog.direction == direction)
+    stmt = stmt.order_by(desc(CallLog.started_at)).limit(limit).offset(offset)
+    result = await db.execute(stmt)
     calls = result.scalars().all()
     return [
         {
             "id": c.id,
             "call_id": c.call_id,
+            "direction": c.direction,
             "caller_id": c.caller_id,
+            "called_number": c.called_number,
             "started_at": c.started_at.isoformat() if c.started_at else None,
             "ended_at": c.ended_at.isoformat() if c.ended_at else None,
             "duration_seconds": c.duration_seconds,
@@ -130,6 +197,7 @@ async def list_calls(limit: int = 50, offset: int = 0, db: AsyncSession = Depend
             "disposition": c.disposition,
             "transferred_to": c.transferred_to,
             "appointment_id": c.appointment_id,
+            "notes": c.notes,
         }
         for c in calls
     ]
@@ -144,7 +212,9 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)):
     return {
         "id": call.id,
         "call_id": call.call_id,
+        "direction": call.direction,
         "caller_id": call.caller_id,
+        "called_number": call.called_number,
         "started_at": call.started_at.isoformat() if call.started_at else None,
         "ended_at": call.ended_at.isoformat() if call.ended_at else None,
         "duration_seconds": call.duration_seconds,
@@ -268,6 +338,7 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
             "assigned_queues": [item for item in (agent.assigned_queues or "").split(",") if item],
             "current_call_id": agent.current_call_id,
             "last_offered_at": agent.last_offered_at.isoformat() if agent.last_offered_at else None,
+            "state_changed_at": agent.state_changed_at.isoformat() if agent.state_changed_at else None,
             "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
         }
         for agent in agents
@@ -295,6 +366,7 @@ async def register_agent(body: AgentRegister, db: AsyncSession = Depends(get_db)
         "preferred_language": agent.preferred_language,
         "supported_languages": [item for item in (agent.supported_languages or "").split(",") if item],
         "assigned_queues": [item for item in (agent.assigned_queues or "").split(",") if item],
+        "state_changed_at": agent.state_changed_at.isoformat() if agent.state_changed_at else None,
     }
 
 
@@ -344,6 +416,182 @@ async def patch_agent(agent_id: str, body: AgentStatePatch, db: AsyncSession = D
         "supported_languages": [item for item in (agent.supported_languages or "").split(",") if item],
         "assigned_queues": [item for item in (agent.assigned_queues or "").split(",") if item],
         "current_call_id": agent.current_call_id,
+        "state_changed_at": agent.state_changed_at.isoformat() if agent.state_changed_at else None,
+    }
+
+
+@app.delete("/api/agents/{agent_id}")
+async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(AgentProfile).where(AgentProfile.agent_id == agent_id))
+    agent = result.scalars().first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if agent.current_call_id:
+        raise HTTPException(status_code=409, detail="Agent is on an active call")
+    await db.delete(agent)
+    await db.commit()
+    return {"deleted": agent_id}
+
+
+# ── Campaigns / outbound scaffolding ────────────────────────────────────────
+
+@app.get("/api/campaigns")
+async def list_campaigns(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).order_by(desc(Campaign.created_at)))
+    return [_campaign_payload(campaign) for campaign in result.scalars().all()]
+
+
+@app.get("/api/campaigns/{campaign_id}")
+async def get_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).where(Campaign.campaign_id == campaign_id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return _campaign_payload(campaign)
+
+
+@app.post("/api/campaigns")
+async def create_campaign(body: CampaignCreate, db: AsyncSession = Depends(get_db)):
+    target_list = _parse_target_list(body.target_list)
+    now = datetime.utcnow()
+    campaign = Campaign(
+        campaign_id=f"camp-{uuid4().hex[:12]}",
+        name=body.name.strip(),
+        description=(body.description or "").strip(),
+        caller_id=(body.caller_id or "").strip(),
+        script=body.script or "",
+        target_list=json.dumps(target_list),
+        status="draft",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(campaign)
+    await db.commit()
+    await db.refresh(campaign)
+    return _campaign_payload(campaign)
+
+
+@app.patch("/api/campaigns/{campaign_id}")
+async def patch_campaign(campaign_id: str, body: CampaignPatch, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).where(Campaign.campaign_id == campaign_id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if body.name is not None:
+        campaign.name = body.name.strip()
+    if body.description is not None:
+        campaign.description = body.description.strip()
+    if body.caller_id is not None:
+        campaign.caller_id = body.caller_id.strip()
+    if body.script is not None:
+        campaign.script = body.script
+    if body.target_list is not None:
+        campaign.target_list = json.dumps(_parse_target_list(body.target_list))
+    if body.status is not None:
+        campaign.status = body.status
+    campaign.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(campaign)
+    return _campaign_payload(campaign)
+
+
+@app.delete("/api/campaigns/{campaign_id}")
+async def delete_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).where(Campaign.campaign_id == campaign_id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status == "active":
+        raise HTTPException(status_code=409, detail="Active campaigns cannot be deleted")
+    await db.delete(campaign)
+    await db.commit()
+    return {"deleted": campaign_id}
+
+
+@app.post("/api/campaigns/{campaign_id}/start")
+async def start_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).where(Campaign.campaign_id == campaign_id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    now = datetime.utcnow()
+    campaign.status = "active"
+    campaign.started_at = campaign.started_at or now
+    campaign.updated_at = now
+    await db.commit()
+    await db.refresh(campaign)
+    return _campaign_payload(campaign)
+
+
+@app.post("/api/campaigns/{campaign_id}/pause")
+async def pause_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).where(Campaign.campaign_id == campaign_id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign.status = "paused"
+    campaign.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(campaign)
+    return _campaign_payload(campaign)
+
+
+@app.post("/api/campaigns/{campaign_id}/complete")
+async def complete_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Campaign).where(Campaign.campaign_id == campaign_id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    now = datetime.utcnow()
+    campaign.status = "completed"
+    campaign.completed_at = now
+    campaign.updated_at = now
+    await db.commit()
+    await db.refresh(campaign)
+    return _campaign_payload(campaign)
+
+
+@app.post("/api/outbound/test-call")
+async def outbound_test_call(body: OutboundTestCallBody, db: AsyncSession = Depends(get_db)):
+    destination = body.destination.strip()
+    context = (body.context or "helix-outbound").strip() or "helix-outbound"
+    caller_id = (body.caller_id or settings.operator_extension or "9999").strip()
+
+    ari = get_shared_ari_client()
+    if not ari:
+        raise HTTPException(status_code=503, detail="ARI agent is not connected")
+    try:
+        channel = await ari.originate_to_dialplan(
+            endpoint=f"Local/{destination}@{context}",
+            context=context,
+            extension=destination,
+            priority=1,
+            caller_id=caller_id,
+        )
+    except Exception as exc:
+        log.error("Outbound test call originate failed", destination=destination, context=context, error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    call_log = CallLog(
+        call_id=f"outbound-{channel.get('id', uuid4().hex[:12])}",
+        direction="outbound",
+        caller_id=caller_id,
+        called_number=destination,
+        started_at=datetime.utcnow(),
+        disposition="originated",
+        notes=json.dumps({"context": context, "channel_id": channel.get("id", "")}),
+    )
+    db.add(call_log)
+    await db.commit()
+    await db.refresh(call_log)
+
+    return {
+        "channel_id": channel.get("id"),
+        "call_log_id": call_log.id,
+        "call_id": call_log.call_id,
+        "destination": destination,
+        "context": context,
     }
 
 
@@ -580,7 +828,7 @@ async def health():
     return {
         "status": "ok",
         "service": "helix-ai",
-        "version": "1.8.0",
+        "version": "1.9.0",
         "tts_engine": "Kokoro",
         "tts_voices": {
             "en": settings.kokoro_voice_en,

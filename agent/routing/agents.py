@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AgentProfile, RoutingRule
@@ -157,6 +157,7 @@ async def register_or_update_agent(
         agent.supported_languages = _serialize_csv(supported_languages)
         agent.assigned_queues = _serialize_csv(assigned_queues)
         agent.current_call_id = None if availability_state != "busy" else agent.current_call_id
+        agent.state_changed_at = now
         agent.updated_at = now
     else:
         agent = AgentProfile(
@@ -167,6 +168,7 @@ async def register_or_update_agent(
             preferred_language=preferred_language,
             supported_languages=_serialize_csv(supported_languages),
             assigned_queues=_serialize_csv(assigned_queues),
+            state_changed_at=now,
             updated_at=now,
         )
         db.add(agent)
@@ -208,7 +210,9 @@ async def set_agent_state(
             agent.supported_languages = _serialize_csv(supported)
     if availability_state != "busy":
         agent.current_call_id = None
-    agent.updated_at = datetime.utcnow()
+    now = datetime.utcnow()
+    agent.state_changed_at = now
+    agent.updated_at = now
     await db.commit()
     await db.refresh(agent)
     return agent
@@ -218,10 +222,12 @@ async def reserve_agent_for_call(db: AsyncSession, agent_id: str, call_id: str) 
     agent = await get_agent_by_agent_id(db, agent_id)
     if not agent:
         return None
+    now = datetime.utcnow()
     agent.availability_state = "busy"
     agent.current_call_id = call_id
-    agent.last_offered_at = datetime.utcnow()
-    agent.updated_at = datetime.utcnow()
+    agent.last_offered_at = now
+    agent.state_changed_at = now
+    agent.updated_at = now
     await db.commit()
     await db.refresh(agent)
     return agent
@@ -236,10 +242,101 @@ async def release_agent_from_call(db: AsyncSession, agent_id: str, call_id: str 
     if agent.availability_state == "busy":
         agent.availability_state = "available"
     agent.current_call_id = None
-    agent.updated_at = datetime.utcnow()
+    now = datetime.utcnow()
+    agent.state_changed_at = now
+    agent.updated_at = now
     await db.commit()
     await db.refresh(agent)
     return agent
+
+
+def _to_agent_route(agent: AgentProfile, caller_lang: str) -> AgentRoute:
+    preferred_language = agent.preferred_language or "en"
+    supported_languages = _csv_list(agent.supported_languages) or [preferred_language]
+    return AgentRoute(
+        agent_id=agent.agent_id,
+        extension=agent.extension,
+        display_name=agent.display_name,
+        preferred_language=preferred_language,
+        supported_languages=supported_languages,
+        assigned_queues=_csv_list(agent.assigned_queues),
+        translation_required=preferred_language != caller_lang,
+        source="agent",
+    )
+
+
+async def claim_agent_for_call(
+    db: AsyncSession,
+    caller_lang: str,
+    call_id: str,
+    requested_queue: str | None = None,
+) -> AgentRoute | None:
+    # Use optimistic conditional UPDATE because SQLite bare-metal deploys do not
+    # give us a clean SKIP LOCKED story; the row is claimed only if still idle.
+    for _attempt in range(3):
+        result = await db.execute(
+            select(AgentProfile).where(
+                AgentProfile.availability_state == "available",
+                AgentProfile.current_call_id.is_(None),
+            )
+        )
+        agents = list(result.scalars().all())
+        if not agents:
+            return None
+
+        matching = [agent for agent in agents if _queue_matches(agent, requested_queue)]
+        if requested_queue and not matching:
+            log.warning("no queue match, falling back", requested_queue=requested_queue)
+        candidates = matching or agents
+
+        preferred = [agent for agent in candidates if (agent.preferred_language or "en") == caller_lang]
+        supported = [agent for agent in candidates if caller_lang in _csv_list(agent.supported_languages)]
+        tier = preferred or supported or candidates
+        ranked = sorted(
+            tier,
+            key=lambda agent: (
+                agent.last_offered_at or datetime.min,
+                agent.display_name.lower(),
+                agent.extension,
+            ),
+        )
+
+        now = datetime.utcnow()
+        for candidate in ranked:
+            claim = await db.execute(
+                update(AgentProfile)
+                .where(
+                    AgentProfile.id == candidate.id,
+                    AgentProfile.availability_state == "available",
+                    AgentProfile.current_call_id.is_(None),
+                )
+                .values(
+                    availability_state="busy",
+                    current_call_id=call_id,
+                    last_offered_at=now,
+                    state_changed_at=now,
+                    updated_at=now,
+                )
+            )
+            if (claim.rowcount or 0) == 1:
+                await db.commit()
+                claimed = await get_agent_by_agent_id(db, candidate.agent_id)
+                if not claimed:
+                    return None
+                route = _to_agent_route(claimed, caller_lang)
+                log.info(
+                    "Claimed available human agent",
+                    agent_id=route.agent_id,
+                    extension=route.extension,
+                    queue=requested_queue,
+                    caller_lang=caller_lang,
+                    agent_lang=route.preferred_language,
+                    translation_required=route.translation_required,
+                )
+                return route
+
+        await db.rollback()
+    return None
 
 
 async def find_available_agent(
@@ -268,16 +365,7 @@ async def find_available_agent(
         ),
     )
     selected = ranked[0]
-    route = AgentRoute(
-        agent_id=selected.agent_id,
-        extension=selected.extension,
-        display_name=selected.display_name,
-        preferred_language=selected.preferred_language or "en",
-        supported_languages=_csv_list(selected.supported_languages) or [selected.preferred_language or "en"],
-        assigned_queues=_csv_list(selected.assigned_queues),
-        translation_required=(selected.preferred_language or "en") != caller_lang,
-        source="agent",
-    )
+    route = _to_agent_route(selected, caller_lang)
     log.info("Selected available human agent",
              agent_id=route.agent_id,
              extension=route.extension,
