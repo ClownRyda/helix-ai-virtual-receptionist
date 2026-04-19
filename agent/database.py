@@ -1,6 +1,6 @@
 """
 Database models and setup — call logs, appointments, routing rules,
-holidays, and voicemail messages.
+holidays, voicemail messages, and human-agent presence state.
 """
 from datetime import datetime, date
 from sqlalchemy import Column, Integer, String, DateTime, Date, Text, Boolean, Float
@@ -94,6 +94,27 @@ class VoicemailMessage(Base):
     transcript = Column(Text, nullable=True)
     # unread | read | archived
     status = Column(String(16), default="unread")
+
+
+class AgentProfile(Base):
+    """
+    Human agent registration / presence state for live handoff.
+    """
+    __tablename__ = "agent_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String(64), unique=True, index=True)
+    display_name = Column(String(128), nullable=False)
+    extension = Column(String(32), unique=True, index=True)
+    availability_state = Column(String(16), default="offline", index=True)
+    preferred_language = Column(String(8), default="en")
+    # Comma-separated ISO language codes, e.g. "en,es"
+    supported_languages = Column(Text, default="en")
+    # Comma-separated queue / skill names, e.g. "sales,support"
+    assigned_queues = Column(Text, default="")
+    current_call_id = Column(String(64), nullable=True)
+    last_offered_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 async def init_db():

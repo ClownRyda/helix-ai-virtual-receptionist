@@ -5,10 +5,10 @@ import {
   Phone, ArrowRight, CalendarClock, ArrowLeftRight, PhoneOff,
   Clock, GitMerge, Mic, Cpu, Volume2, Globe, ShieldCheck,
   Hash, Voicemail, FileText, HelpCircle, Building2,
-  CheckCircle2, XCircle, AlertTriangle, CalendarX,
+  CheckCircle2, XCircle, AlertTriangle, CalendarX, UsersRound,
 } from "lucide-react";
 import { fetchJSON } from "@/lib/queryClient";
-import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, Holiday } from "@shared/schema";
+import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, Holiday, HumanAgent } from "@shared/schema";
 import DispositionBadge from "@/components/DispositionBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -113,6 +113,12 @@ export default function Dashboard() {
     queryFn: () => fetchJSON("/api/appointments"),
   });
 
+  const { data: agents } = useQuery<HumanAgent[]>({
+    queryKey: ["/api/agents"],
+    queryFn: () => fetchJSON("/api/agents"),
+    refetchInterval: 15_000,
+  });
+
   const { data: holidays } = useQuery<Holiday[]>({
     queryKey: ["/api/holidays"],
     queryFn: () => fetchJSON("/api/holidays"),
@@ -142,6 +148,8 @@ export default function Dashboard() {
     ?.filter(h => h.active && new Date(h.date + "T00:00:00") >= new Date())
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 3) ?? [];
+  const availableAgents = agents?.filter((agent) => agent.availability_state === "available") ?? [];
+  const busyAgents = agents?.filter((agent) => agent.availability_state === "busy") ?? [];
 
   // Build hourly label
   const hoursLabel = config
@@ -334,6 +342,47 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+
+          {/* Agent pool snapshot */}
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <SectionHeader title="Agent Pool" linkHref="/agents" linkLabel="Manage" />
+            {!agents?.length ? (
+              <div className="px-5 py-8 text-sm text-muted-foreground flex items-center gap-2">
+                <UsersRound size={15} className="opacity-40" />
+                No agents registered yet
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                <div className="grid grid-cols-2 px-5 py-3 bg-muted/20 text-xs text-muted-foreground uppercase tracking-wide">
+                  <span>Available now</span>
+                  <span>Busy now</span>
+                </div>
+                <div className="grid grid-cols-2 px-5 py-4">
+                  <div className="space-y-2">
+                    {!availableAgents.length ? (
+                      <div className="text-sm text-muted-foreground">No available agents</div>
+                    ) : availableAgents.slice(0, 4).map((agent) => (
+                      <div key={agent.agent_id} className="text-sm text-foreground">
+                        {agent.display_name}
+                        <span className="ml-2 text-xs text-muted-foreground font-mono">{agent.extension}</span>
+                        <span className="ml-2 text-xs text-primary font-mono">{agent.preferred_language}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-2">
+                    {!busyAgents.length ? (
+                      <div className="text-sm text-muted-foreground">No active agent calls</div>
+                    ) : busyAgents.slice(0, 4).map((agent) => (
+                      <div key={agent.agent_id} className="text-sm text-foreground">
+                        {agent.display_name}
+                        <span className="ml-2 text-xs text-muted-foreground font-mono">{agent.current_call_id ?? agent.extension}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 

@@ -17,8 +17,13 @@ from datetime import datetime, date
 import os
 import re
 
-from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, get_db
+from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, AgentProfile, get_db
 from routing.router import get_all_rules, upsert_rule
+from routing.agents import (
+    list_agents as list_agent_profiles,
+    register_or_update_agent,
+    set_agent_state,
+)
 from gcal.gcal import get_available_slots
 from config import settings
 
@@ -84,6 +89,24 @@ class ConfigPatch(BaseModel):
 
 class VoicemailStatusPatch(BaseModel):
     status: Literal["unread", "read", "archived"]
+
+
+class AgentRegister(BaseModel):
+    agent_id: str
+    display_name: str
+    extension: str
+    preferred_language: Literal["en", "es", "fr", "it", "he", "ro"]
+    availability_state: Literal["offline", "available", "busy", "break"] = "available"
+    supported_languages: list[str] = []
+    assigned_queues: list[str] = []
+
+
+class AgentStatePatch(BaseModel):
+    display_name: Optional[str] = None
+    preferred_language: Optional[Literal["en", "es", "fr", "it", "he", "ro"]] = None
+    availability_state: Optional[Literal["offline", "available", "busy", "break"]] = None
+    supported_languages: Optional[list[str]] = None
+    assigned_queues: Optional[list[str]] = None
 
 
 # ── Call logs ─────────────────────────────────────────────────────────────────
@@ -226,6 +249,102 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(rule)
     await db.commit()
     return {"deleted": rule_id}
+
+
+# ── Agents ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/agents")
+async def list_agents(db: AsyncSession = Depends(get_db)):
+    agents = await list_agent_profiles(db)
+    return [
+        {
+            "id": agent.id,
+            "agent_id": agent.agent_id,
+            "display_name": agent.display_name,
+            "extension": agent.extension,
+            "availability_state": agent.availability_state,
+            "preferred_language": agent.preferred_language,
+            "supported_languages": [item for item in (agent.supported_languages or "").split(",") if item],
+            "assigned_queues": [item for item in (agent.assigned_queues or "").split(",") if item],
+            "current_call_id": agent.current_call_id,
+            "last_offered_at": agent.last_offered_at.isoformat() if agent.last_offered_at else None,
+            "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
+        }
+        for agent in agents
+    ]
+
+
+@app.post("/api/agents/register")
+async def register_agent(body: AgentRegister, db: AsyncSession = Depends(get_db)):
+    agent = await register_or_update_agent(
+        db,
+        agent_id=body.agent_id,
+        display_name=body.display_name,
+        extension=body.extension,
+        preferred_language=body.preferred_language,
+        availability_state=body.availability_state,
+        supported_languages=body.supported_languages,
+        assigned_queues=body.assigned_queues,
+    )
+    return {
+        "id": agent.id,
+        "agent_id": agent.agent_id,
+        "display_name": agent.display_name,
+        "extension": agent.extension,
+        "availability_state": agent.availability_state,
+        "preferred_language": agent.preferred_language,
+        "supported_languages": [item for item in (agent.supported_languages or "").split(",") if item],
+        "assigned_queues": [item for item in (agent.assigned_queues or "").split(",") if item],
+    }
+
+
+@app.patch("/api/agents/{agent_id}")
+async def patch_agent(agent_id: str, body: AgentStatePatch, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(AgentProfile).where(AgentProfile.agent_id == agent_id))
+    agent = result.scalars().first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if body.display_name is not None:
+        agent.display_name = body.display_name
+    if body.preferred_language is not None:
+        agent.preferred_language = body.preferred_language
+        current_supported = [item for item in (agent.supported_languages or "").split(",") if item]
+        if body.preferred_language not in current_supported:
+            current_supported.insert(0, body.preferred_language)
+            agent.supported_languages = ",".join(dict.fromkeys(current_supported))
+    if body.supported_languages is not None:
+        agent.supported_languages = ",".join(dict.fromkeys(body.supported_languages))
+    if body.assigned_queues is not None:
+        agent.assigned_queues = ",".join(dict.fromkeys(q.strip().lower() for q in body.assigned_queues if q.strip()))
+    if body.availability_state is not None:
+        agent = await set_agent_state(
+            db,
+            agent_id=agent_id,
+            availability_state=body.availability_state,
+            preferred_language=body.preferred_language,
+        )
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if body.display_name is not None or body.supported_languages is not None or body.assigned_queues is not None:
+            await db.commit()
+            await db.refresh(agent)
+    else:
+        agent.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(agent)
+
+    return {
+        "id": agent.id,
+        "agent_id": agent.agent_id,
+        "display_name": agent.display_name,
+        "extension": agent.extension,
+        "availability_state": agent.availability_state,
+        "preferred_language": agent.preferred_language,
+        "supported_languages": [item for item in (agent.supported_languages or "").split(",") if item],
+        "assigned_queues": [item for item in (agent.assigned_queues or "").split(",") if item],
+        "current_call_id": agent.current_call_id,
+    }
 
 
 # ── Appointments ─────────────────────────────────────────────────────────────

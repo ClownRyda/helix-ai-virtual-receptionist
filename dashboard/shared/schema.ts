@@ -38,6 +38,23 @@ export interface RoutingRule {
   agent_lang: string;
 }
 
+export type AgentAvailabilityState = "offline" | "available" | "busy" | "break";
+export type AgentLanguage = "en" | "es" | "fr" | "it" | "he" | "ro";
+
+export interface HumanAgent {
+  id: number;
+  agent_id: string;
+  display_name: string;
+  extension: string;
+  availability_state: AgentAvailabilityState;
+  preferred_language: AgentLanguage;
+  supported_languages: string[];
+  assigned_queues: string[];
+  current_call_id: string | null;
+  last_offered_at: string | null;
+  updated_at?: string | null;
+}
+
 export interface Appointment {
   id: number;
   google_event_id: string | null;

@@ -145,6 +145,11 @@ class ConversationState:
         self.secret_game_profile: dict = {}
         self.secret_game_wrong_guesses: int = 0
         self.secret_game_rule_steps_done: set[str] = set()
+        # Top secret mode
+        self.top_secret_mode: bool = False
+        self.top_secret_history: list[dict] = []
+        # System demo mode
+        self.system_demo_mode: bool = False
 
     def add_turn(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})

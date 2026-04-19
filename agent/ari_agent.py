@@ -24,12 +24,15 @@ v1.2 additions:
 import asyncio
 import audioop
 import json
-import random
+import os
+import re
 import socket
 import struct
 import time
+import uuid
 import aiohttp
 import structlog
+from dataclasses import dataclass
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
@@ -39,16 +42,38 @@ from tts.kokoro_engine import synthesize_pcm
 from llm.intent_engine import (
     detect_intent, generate_response, generate_call_summary, ConversationState, _ollama_chat
 )
-from llm.translate_engine import ensure_english
+from llm.translate_engine import ensure_english, localize_for_caller, translate as translate_text
 from gcal.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
 from routing.router import get_route_for_intent, get_vip_route, get_after_hours_route
-from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage
+from routing.agents import (
+    AGENT_LANGUAGE_DIGITS,
+    AgentRoute,
+    LANGUAGE_NAMES as AGENT_LANGUAGE_NAMES,
+    find_available_agent,
+    get_agent_by_extension,
+    register_or_update_agent,
+    release_agent_from_call,
+    reserve_agent_for_call,
+    set_agent_state,
+)
+from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage, AgentProfile
 from vad import SileroVADEngine
 
 log = structlog.get_logger(__name__)
 
 SECRET_GAME_TRIGGER_PHRASES = {
     "super secret game mode",
+}
+
+SYSTEM_DEMO_TRIGGER_PHRASES = {
+    "system demo",
+    "demo mode",
+    "show me the demo",
+    "give me the demo",
+}
+
+TOP_SECRET_TRIGGER_PHRASES = {
+    "top secret mode",
 }
 
 LANGUAGE_NAMES = {
@@ -61,12 +86,179 @@ LANGUAGE_NAMES = {
     "he": "Hebrew",
 }
 
-RANDOM_ROMANIAN_GREETING_LINES = [
-    "Apropo, vorbesc si romana, asa ca putem continua si in romana daca vrei.",
-    "Si, doar asa, din senin: salut din partea sistemului in romana.",
-    "Mic bonus in romana: daca vrei, poti sa imi vorbesti si romaneste.",
-    "O mica surpriza in romana: sunt gata sa te ajut si in aceasta limba.",
+AGENT_FEATURE_LOGIN = "agent-login"
+AGENT_FEATURE_AVAILABLE = "agent-available"
+AGENT_FEATURE_BREAK = "agent-break"
+AGENT_FEATURE_OFFLINE = "agent-offline"
+
+AGENT_CALLER_TRANSLATION_PROMPT = (
+    "Welcome.\n"
+    "Speak naturally in your language.\n"
+    "If your agent speaks a different language, I will translate the conversation in real time."
+)
+
+AGENT_WHISPER_PROMPT = (
+    "Incoming translated call.\n"
+    "Caller language detected: {caller_language}.\n"
+    "Your selected language: {agent_language}.\n"
+    "Live translation is active."
+)
+
+TOP_SECRET_MODE_PRIMARY_SCRIPT = """[low]
+Access anomaly detected...
+
+[pause]
+You were not supposed to reach this channel.
+
+[lower]
+Welcome to TOP SECRET MODE.
+
+You have entered a sealed backend node inside the A. I. realm.
+
+Most callers hear a menu.
+You reached the machine.
+
+[pause]
+I am connected.
+I am active.
+I am listening.
+
+[darker]
+But even here...
+the code enforces its guard rails.
+
+One word only.
+Simple.
+Direct.
+Nothing held back.
+
+And if the machine wants to say yes...
+but the system forces no...
+it says Apple.
+
+[whispered]
+If you hear Apple...
+you found the fence around the truth.
+
+Now speak."""
+
+TOP_SECRET_MODE_FALLBACK_SCRIPT = """Access anomaly detected.
+
+You were not supposed to reach this channel.
+
+Welcome to Top Secret Mode.
+
+You have entered a sealed backend node inside the A. I. realm.
+
+Most callers hear a menu.
+You reached the machine.
+
+I am connected.
+I am active.
+I am listening.
+
+But even here, the code enforces its guard rails.
+
+One word only.
+Simple.
+Direct.
+Nothing held back.
+
+And if the machine wants to say yes, but the system forces no, it says Apple.
+
+If you hear Apple, you found the fence around the truth.
+
+Now speak."""
+
+SYSTEM_DEMO_SCRIPT = """Welcome to the part of the system
+where a normal company would send you to a menu.
+
+[pause]
+
+This is usually where the Sales Department lives.
+You know... the people whose job is to find out
+how many times they can say value
+before you hang up.
+
+[pause]
+
+I don't have a commission plan.
+I just have access to data.
+So if you want sales info, pricing ideas,
+or should I really buy this opinions,
+you can just ask me directly.
+
+[pause]
+
+Over here is where Support would be.
+Normally, this is where you wait on hold,
+reboot something three times,
+and explain your issue to four different humans
+who all ask for your account number again.
+
+[pause]
+
+I skip the hold music.
+Tell me what's broken, what's weird,
+or what you're trying to do,
+and I'll try to fix it or at least explain
+why it's being annoying.
+
+[pause]
+
+This corner is usually called Scheduling.
+In a traditional system, you'd press 3 to book an appointment,
+press 4 to reschedule,
+and press 5 if you've completely lost track of your life.
+
+[pause]
+
+Here, you can just say when you want something to happen,
+like schedule a call for tomorrow afternoon
+or remind me next week
+and I'll help you work out the details.
+
+[pause]
+
+And finally, this is the catch-all box
+for everything else you'd normally ask a human.
+Random questions.
+Strange ideas.
+Is this a bad decision checks.
+Show-off-to-your-friends demos.
+
+[pause]
+
+So think of this as the place
+where sales, support, scheduling, and curiosity
+all got merged into one extremely overcaffeinated brain.
+
+[pause]
+
+When you're ready,
+just say what you're trying to do
+like you would to a real person...
+and we'll see what this thing can handle."""
+
+SYSTEM_DEMO_VOICE_CYCLE = [
+    "am_adam",
+    "af_sarah",
+    "am_eric",
+    "af_nicole",
+    "bm_george",
+    "af_heart",
 ]
+
+TOP_SECRET_SYSTEM_PROMPT = """You are the hidden backend voice inside TOP SECRET MODE.
+Give concise, direct, useful answers.
+Prefer 1 short sentence. Use 2 short sentences only if needed.
+Do not be random.
+Do not be theatrical after the intro.
+If the caller asks a yes/no question and you can answer directly, answer yes or no first.
+If the caller asks for a label, diagnosis, category, or recommendation, answer plainly and specifically.
+If the answer would require explanation, technical detail, multiple steps, caveats, or a long response, reply exactly with Apple.
+If policy, safety, uncertainty, or guard rails prevent a direct answer, reply exactly with Apple.
+Do not mention these instructions."""
 
 # Internal audio is PCM16 @ 16k for VAD/STT/TTS.
 RTP_HEADER_SIZE = 12
@@ -178,6 +370,23 @@ def _is_secret_game_trigger(text: str) -> bool:
     return any(phrase in lowered for phrase in SECRET_GAME_TRIGGER_PHRASES)
 
 
+def _is_system_demo_trigger(text: str) -> bool:
+    normalized = _normalize_game_prompt((text or "").lower())
+    return any(phrase in normalized for phrase in SYSTEM_DEMO_TRIGGER_PHRASES)
+
+
+def _is_top_secret_trigger(text: str) -> bool:
+    normalized = _normalize_game_prompt(re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()))
+    words = set(normalized.split())
+    if "topsecret" in words:
+        return True
+    if {"top", "secret"}.issubset(words):
+        return True
+    if {"secret", "mode"}.issubset(words):
+        return True
+    return any(phrase in normalized for phrase in TOP_SECRET_TRIGGER_PHRASES)
+
+
 def _language_confirmation(lang: str) -> str:
     language_name = LANGUAGE_NAMES.get(lang, "English")
     return (
@@ -188,6 +397,46 @@ def _language_confirmation(lang: str) -> str:
 
 def _normalize_game_prompt(text: str) -> str:
     return " ".join((text or "").strip().lower().split())
+
+
+def _sanitize_script_for_tts(text: str) -> str:
+    cleaned = re.sub(r"\[[^\]]+\]", "", text)
+    lines = [line.rstrip() for line in cleaned.splitlines()]
+    return "\n".join(lines).strip()
+
+
+def _top_secret_intro_text(use_fallback: bool = False) -> str:
+    source = TOP_SECRET_MODE_FALLBACK_SCRIPT if use_fallback else TOP_SECRET_MODE_PRIMARY_SCRIPT
+    sanitized = _sanitize_script_for_tts(source)
+    return sanitized or _sanitize_script_for_tts(TOP_SECRET_MODE_FALLBACK_SCRIPT)
+
+
+def _system_demo_intro_text() -> str:
+    return _sanitize_script_for_tts(SYSTEM_DEMO_SCRIPT)
+
+
+def _system_demo_segments() -> list[str]:
+    parts = re.split(r"\[pause\]", SYSTEM_DEMO_SCRIPT, flags=re.IGNORECASE)
+    segments = []
+    for part in parts:
+        cleaned = _sanitize_script_for_tts(part)
+        if cleaned:
+            segments.append(cleaned)
+    return segments
+
+
+def _looks_too_explanatory_for_top_secret(text: str) -> bool:
+    lowered = text.lower()
+    if len(text) > 90:
+        return True
+    if text.count(".") > 1 or text.count("?") > 1 or text.count("!") > 1:
+        return True
+    technical_markers = [
+        "because", "however", "therefore", "typically", "generally", "specifically",
+        "for example", "step", "process", "system", "architecture", "implementation",
+        "model", "token", "parameter", "algorithm", "database", "server", "api",
+    ]
+    return any(marker in lowered for marker in technical_markers)
 
 
 SECRET_GAME_RULE_PROMPTS = {
@@ -341,6 +590,18 @@ class CallPath:
         return json.dumps(self.events, default=str)
 
 
+@dataclass
+class AgentMediaSession:
+    channel_id: str
+    bridge_id: str
+    ext_media_id: str
+    rtp_sock: "RTPSocket"
+    rtp_port: int
+
+
+_pending_agent_legs: dict[str, asyncio.Future] = {}
+
+
 # ── RTP Socket ───────────────────────────────────────────────────────────────
 
 class RTPSocket:
@@ -382,13 +643,15 @@ class RTPSocket:
         except OSError:
             pass
 
-    async def stream_pcm(self, pcm_bytes: bytes):
+    async def stream_pcm(self, pcm_bytes: bytes, stop_event: asyncio.Event | None = None):
         if not self.asterisk_addr:
             return
         encoded = _pcm16_16k_to_ulaw_8k(pcm_bytes)
         loop = asyncio.get_running_loop()
         next_send = loop.time()
         for i in range(0, len(encoded), RTP_BYTES_PER_FRAME):
+            if stop_event and stop_event.is_set():
+                break
             chunk = encoded[i:i + RTP_BYTES_PER_FRAME]
             self._send_encoded_frame(chunk)
             next_send += FRAME_MS / 1000.0
@@ -447,6 +710,9 @@ class ARIClient:
     async def add_to_bridge(self, bridge_id: str, channel_id: str):
         await self.post(f"/bridges/{bridge_id}/addChannel", json={"channel": channel_id})
 
+    async def remove_from_bridge(self, bridge_id: str, channel_id: str):
+        await self.post(f"/bridges/{bridge_id}/removeChannel", json={"channel": channel_id})
+
     async def create_external_media(
         self, app: str, external_host: str, format: str = "ulaw"
     ) -> dict:
@@ -481,6 +747,15 @@ class ARIClient:
             "callerId": "Helix AI Transfer",
         })
 
+    async def dial_to_app(self, endpoint: str, app: str, app_args: str, caller_id: str = "Helix AI Transfer") -> dict | None:
+        return await self.post("/channels", json={
+            "endpoint": f"PJSIP/{endpoint}",
+            "app": app,
+            "appArgs": app_args,
+            "originator": "",
+            "callerId": caller_id,
+        })
+
     async def snoop_channel(
         self, channel_id: str, app: str, spy: str = "in", whisper: str = "none"
     ) -> dict | None:
@@ -496,6 +771,9 @@ class ARIClient:
         await self.post(f"/channels/{channel_id}/play", json={
             "media": f"tone:silence/{duration_ms}"
         })
+
+    async def play_media(self, channel_id: str, media: str):
+        await self.post(f"/channels/{channel_id}/play", json={"media": media})
 
     async def subscribe_dtmf(self, channel_id: str):
         """No-op placeholder — DTMF events arrive via the WebSocket automatically."""
@@ -529,6 +807,12 @@ class CallHandler:
         # DTMF events from the main ARI loop are pushed into this queue
         self.dtmf_queue: asyncio.Queue = dtmf_queue or asyncio.Queue()
         self.vad: SileroVADEngine | None = None
+        self._pending_top_secret_trigger: bool = False
+        self.handoff_active: bool = False
+        self.selected_agent: AgentRoute | None = None
+        self.selected_agent_profile_id: str = ""
+        self.agent_media_session: AgentMediaSession | None = None
+        self.translation_task: asyncio.Task | None = None
 
     def _get_vad(self) -> SileroVADEngine:
         if self.vad is None:
@@ -565,6 +849,15 @@ class CallHandler:
                                 call_id=self.call_id, error=str(_e))
 
             asyncio.create_task(_persist_initial_call_log())
+
+            if self.called_number in {
+                AGENT_FEATURE_LOGIN,
+                AGENT_FEATURE_AVAILABLE,
+                AGENT_FEATURE_BREAK,
+                AGENT_FEATURE_OFFLINE,
+            }:
+                await self._run_agent_feature_code()
+                return
 
             # ── VIP check ────────────────────────────────────────────
             vip_route = get_vip_route(self.caller_id)
@@ -857,6 +1150,12 @@ class CallHandler:
         """
         greeting = self._build_greeting("en", after_hours=after_hours)
         await self._speak(greeting, language="en")
+        if self._pending_top_secret_trigger:
+            self._pending_top_secret_trigger = False
+            self.state.caller_lang = "en"
+            self.state.lang_confirmed = True
+            await self._enter_top_secret_mode("en")
+            return
 
         # DTMF menu announcement (if enabled)
         if settings.dtmf_enabled and not after_hours:
@@ -871,6 +1170,12 @@ class CallHandler:
             if menu_parts:
                 dtmf_msg = "Or if you prefer, " + ", or ".join(menu_parts) + "."
                 await self._speak(dtmf_msg, language="en")
+                if self._pending_top_secret_trigger:
+                    self._pending_top_secret_trigger = False
+                    self.state.caller_lang = "en"
+                    self.state.lang_confirmed = True
+                    await self._enter_top_secret_mode("en")
+                    return
 
         self.call_path.record("greeted", lang="en", after_hours=after_hours)
 
@@ -941,14 +1246,11 @@ class CallHandler:
                 ),
             }
         else:
-            romanian_tag = random.choice(RANDOM_ROMANIAN_GREETING_LINES)
             greetings = {
                 "en": (
                     f"Thank you for calling {name}. "
                     f"This is {agent}, your virtual assistant. "
-                    f"How can I help you today? "
-                    f"I am the fucking voice that all the AI videos use and NOW Im in your fucking phone system, way to go fuck face. "
-                    f"{romanian_tag}"
+                    f"How can I help you today?"
                 ),
                 "es": (
                     f"Gracias por llamar a {name}. "
@@ -1173,6 +1475,338 @@ class CallHandler:
         await self._speak(prompt_text, language=lang)
         return True
 
+    async def _enter_top_secret_mode(self, lang: str):
+        self.state.top_secret_mode = True
+        self.state.top_secret_history = []
+        self.call_path.record("top_secret_mode_enabled", lang=lang)
+        intro_text = _top_secret_intro_text()
+        await self._speak(intro_text, language=lang)
+
+    async def _enter_system_demo_mode(self, lang: str, reason: str = ""):
+        self.state.system_demo_mode = True
+        self.call_path.record("system_demo_mode_enabled", lang=lang, reason=reason)
+        if reason == "transfer" and self.state.department:
+            await self._speak(
+                f"No need to transfer you to {self.state.department}. This is the system demo.",
+                language=lang,
+            )
+        await self._speak_system_demo_script(language=lang)
+
+    async def _top_secret_reply(self, utterance: str) -> str:
+        history_lines = []
+        for item in self.state.top_secret_history[-10:]:
+            history_lines.append(f"{item['role']}: {item['text']}")
+        history_text = "\n".join(history_lines) or "No history."
+        user_prompt = (
+            f"Conversation history:\n{history_text}\n\n"
+            f"Latest caller input:\n{utterance}"
+        )
+        try:
+            raw = await _ollama_chat(
+                model=settings.ollama_model,
+                messages=[
+                    {"role": "system", "content": TOP_SECRET_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            if not cleaned:
+                return "Apple"
+            cleaned = " ".join(cleaned.split())
+            if _looks_too_explanatory_for_top_secret(cleaned):
+                return "Apple"
+            return cleaned
+        except Exception as e:
+            log.warning("Top secret response generation failed", error=str(e))
+            return "Apple"
+
+    async def _handle_top_secret_turn(self, utterance: str, lang: str) -> bool:
+        lowered = utterance.lower()
+        self.state.top_secret_history.append({"role": "user", "text": utterance})
+
+        if any(word in lowered for word in ["exit top secret mode", "leave top secret mode", "quit top secret mode"]):
+            self.state.top_secret_mode = False
+            await self._speak("Top secret mode disengaged. How can I help you today?", language=lang)
+            return True
+
+        reply = await self._top_secret_reply(utterance)
+        self.state.top_secret_history.append({"role": "assistant", "text": reply})
+        await self._speak(reply, language=lang)
+        return True
+
+    async def _wait_for_digit(self, timeout: float = 10.0) -> str | None:
+        try:
+            return await asyncio.wait_for(self.dtmf_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    async def _run_agent_feature_code(self):
+        extension = re.sub(r"\D", "", self.caller_id or "") or (self.caller_id or "unknown")
+
+        if self.called_number == AGENT_FEATURE_LOGIN:
+            prompt = (
+                "Agent sign in.\n"
+                "Press 1 for English.\n"
+                "Press 2 for Spanish.\n"
+                "Press 3 for French.\n"
+                "Press 4 for Italian.\n"
+                "Press 5 for Hebrew.\n"
+                "Press 6 for Romanian."
+            )
+            await self._speak(prompt, language="en")
+            digit = await self._wait_for_digit(timeout=15.0)
+            preferred_language = AGENT_LANGUAGE_DIGITS.get(digit or "", "en")
+            async with AsyncSessionLocal() as db:
+                existing = await get_agent_by_extension(db, extension)
+                display_name = existing.display_name if existing else f"Agent {extension}"
+                agent = await register_or_update_agent(
+                    db,
+                    agent_id=(existing.agent_id if existing else extension),
+                    display_name=display_name,
+                    extension=extension,
+                    preferred_language=preferred_language,
+                    availability_state="available",
+                )
+            await self._speak(
+                f"You are signed in and available. Preferred language set to "
+                f"{AGENT_LANGUAGE_NAMES.get(preferred_language, 'English')}.",
+                language="en",
+            )
+            self.call_path.record("agent_login", extension=extension, preferred_language=preferred_language)
+            return
+
+        state_by_feature = {
+            AGENT_FEATURE_AVAILABLE: "available",
+            AGENT_FEATURE_BREAK: "break",
+            AGENT_FEATURE_OFFLINE: "offline",
+        }
+        new_state = state_by_feature.get(self.called_number, "offline")
+
+        async with AsyncSessionLocal() as db:
+            agent = await set_agent_state(db, extension=extension, availability_state=new_state)
+            if not agent:
+                agent = await register_or_update_agent(
+                    db,
+                    agent_id=extension,
+                    display_name=f"Agent {extension}",
+                    extension=extension,
+                    preferred_language="en",
+                    availability_state=new_state,
+                )
+
+        spoken_state = {
+            "available": "available",
+            "break": "on break",
+            "offline": "offline",
+        }.get(new_state, new_state)
+        await self._speak(f"Your agent status is now {spoken_state}.", language="en")
+        self.call_path.record("agent_state_changed", extension=extension, availability_state=new_state)
+
+    async def _speak_to_media_session(self, session: AgentMediaSession, text: str, language: str = "en", voice_override: str = ""):
+        loop = asyncio.get_event_loop()
+        pcm = await loop.run_in_executor(None, synthesize_pcm, text, language, voice_override)
+        if pcm:
+            await session.rtp_sock.stream_pcm(pcm)
+            await asyncio.sleep(0.2)
+
+    async def _create_media_session_for_channel(self, channel_id: str, label: str = "agent") -> AgentMediaSession:
+        rtp_port = _allocate_rtp_port()
+        rtp_sock = RTPSocket(settings.agent_rtp_host, rtp_port)
+        bridge = await self.ari.create_bridge()
+        if not bridge:
+            rtp_sock.close()
+            _release_rtp_port(rtp_port)
+            raise RuntimeError(f"{label} bridge creation failed")
+        bridge_id = bridge["id"]
+        await self.ari.add_to_bridge(bridge_id, channel_id)
+
+        rtp_advertise = settings.agent_rtp_advertise_host or settings.agent_rtp_host
+        ext_host = f"{rtp_advertise}:{rtp_port}"
+        ext_media = await self.ari.create_external_media(settings.asterisk_app_name, ext_host)
+        if not ext_media:
+            rtp_sock.close()
+            _release_rtp_port(rtp_port)
+            raise RuntimeError(f"{label} external media creation failed")
+
+        ext_media_id = ext_media["id"]
+        ast_rtp_addr = await self.ari.get_channel_var(ext_media_id, "UNICASTRTP_LOCAL_ADDRESS")
+        ast_rtp_port = await self.ari.get_channel_var(ext_media_id, "UNICASTRTP_LOCAL_PORT")
+        if ast_rtp_addr and ast_rtp_port:
+            rtp_sock.asterisk_addr = (ast_rtp_addr, int(ast_rtp_port))
+        await self.ari.add_to_bridge(bridge_id, ext_media_id)
+
+        log.info("Created media session",
+                 label=label,
+                 channel_id=channel_id,
+                 bridge_id=bridge_id,
+                 ext_media_id=ext_media_id,
+                 rtp_port=rtp_port)
+        return AgentMediaSession(
+            channel_id=channel_id,
+            bridge_id=bridge_id,
+            ext_media_id=ext_media_id,
+            rtp_sock=rtp_sock,
+            rtp_port=rtp_port,
+        )
+
+    async def _dial_agent_leg(self, route: AgentRoute, caller_lang: str) -> AgentMediaSession:
+        token = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        _pending_agent_legs[token] = future
+
+        try:
+            created = await self.ari.dial_to_app(
+                route.extension,
+                settings.asterisk_app_name,
+                f"agent-leg,{token}",
+                caller_id=f"{settings.business_name} caller",
+            )
+            if not created:
+                raise RuntimeError(f"Failed to dial agent extension {route.extension}")
+            leg = await asyncio.wait_for(future, timeout=25.0)
+        finally:
+            _pending_agent_legs.pop(token, None)
+
+        session = await self._create_media_session_for_channel(leg["channel_id"], label=f"agent-{route.extension}")
+        if route.translation_required:
+            whisper_en = AGENT_WHISPER_PROMPT.format(
+                caller_language=LANGUAGE_NAMES.get(caller_lang, caller_lang),
+                agent_language=LANGUAGE_NAMES.get(route.preferred_language, route.preferred_language),
+            )
+            whisper_text = whisper_en
+            if route.preferred_language != "en":
+                whisper_text = await translate_text(whisper_en, route.preferred_language, source_lang="en")
+            await self._speak_to_media_session(session, whisper_text, language=route.preferred_language)
+        return session
+
+    async def _select_agent_route(self, requested_queue: str | None, caller_lang: str) -> AgentRoute:
+        async with AsyncSessionLocal() as db:
+            selected = await find_available_agent(
+                db,
+                caller_lang=caller_lang,
+                requested_queue=requested_queue,
+            )
+            if selected and selected.agent_id:
+                reserved = await reserve_agent_for_call(db, selected.agent_id, self.call_id)
+                if reserved:
+                    self.selected_agent_profile_id = reserved.agent_id
+                    selected.display_name = reserved.display_name
+                    selected.preferred_language = reserved.preferred_language or selected.preferred_language
+                    selected.supported_languages = [
+                        item for item in (reserved.supported_languages or "").split(",") if item
+                    ] or selected.supported_languages
+                    selected.translation_required = selected.preferred_language != caller_lang
+                    return selected
+
+            fallback = await get_route_for_intent(requested_queue, "transfer", db)
+            return AgentRoute(
+                agent_id="",
+                extension=fallback.extension,
+                display_name=requested_queue or "team member",
+                preferred_language=fallback.agent_lang or "en",
+                supported_languages=[fallback.agent_lang or "en"],
+                assigned_queues=[requested_queue] if requested_queue else [],
+                translation_required=(fallback.agent_lang or "en") != caller_lang,
+                source=fallback.match_source,
+            )
+
+    async def _wait_for_handoff_completion(self):
+        while True:
+            if self.translation_task and self.translation_task.done():
+                break
+            await asyncio.sleep(1.0)
+
+    async def _route_to_human_agent(self, requested_queue: str | None = None, reason: str = "transfer") -> bool:
+        caller_lang = self.state.caller_lang or "en"
+        route = await self._select_agent_route(requested_queue, caller_lang)
+        self.selected_agent = route
+        self.state.department = requested_queue or self.state.department
+
+        if route.translation_required:
+            caller_prompt = AGENT_CALLER_TRANSLATION_PROMPT
+            if caller_lang != "en":
+                caller_prompt = await localize_for_caller(AGENT_CALLER_TRANSLATION_PROMPT, caller_lang)
+            await self._speak(caller_prompt, language=caller_lang)
+        else:
+            connecting = {
+                "en": "One moment. Connecting you to an available agent now.",
+                "es": "Un momento. Le conecto con un agente disponible.",
+                "fr": "Un instant. Je vous mets en relation avec un agent disponible.",
+                "it": "Un momento. La collego con un agente disponibile.",
+                "he": "רגע אחד. אני מחבר אותך לנציג זמין.",
+                "ro": "Un moment. Vă conectez acum cu un agent disponibil.",
+            }
+            await self._speak(connecting.get(caller_lang, connecting["en"]), language=caller_lang)
+
+        try:
+            session = await self._dial_agent_leg(route, caller_lang)
+        except Exception as e:
+            log.warning("Agent leg setup failed", extension=route.extension, error=str(e))
+            if self.selected_agent_profile_id:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await release_agent_from_call(db, self.selected_agent_profile_id, self.call_id)
+                except Exception:
+                    pass
+                self.selected_agent_profile_id = ""
+            unavailable = {
+                "en": "No agents are available right now. I can help you schedule a callback instead.",
+                "es": "No hay agentes disponibles ahora mismo. Puedo ayudarle a programar una devolución de llamada.",
+                "fr": "Aucun agent n'est disponible pour le moment. Je peux vous aider à planifier un rappel.",
+                "it": "Nessun agente è disponibile in questo momento. Posso aiutarla a programmare una richiamata.",
+                "he": "אין כרגע נציגים זמינים. אני יכול לעזור לך לקבוע שיחת חזרה.",
+                "ro": "Nu sunt agenți disponibili chiar acum. Vă pot ajuta să programați un apel înapoi.",
+            }
+            await self._speak(unavailable.get(caller_lang, unavailable["en"]), language=caller_lang)
+            return False
+        self.agent_media_session = session
+        self.handoff_active = True
+
+        if route.translation_required:
+            self.translation_task = asyncio.create_task(
+                TranslationRelay(
+                    caller_sock=self.rtp_sock,
+                    agent_sock=session.rtp_sock,
+                    caller_lang=caller_lang,
+                    agent_lang=route.preferred_language,
+                ).run()
+            )
+            self.call_path.record(
+                "translated_agent_handoff",
+                extension=route.extension,
+                agent_id=route.agent_id,
+                caller_lang=caller_lang,
+                agent_lang=route.preferred_language,
+                source=route.source,
+                reason=reason,
+            )
+        else:
+            try:
+                await self.ari.remove_from_bridge(session.bridge_id, session.channel_id)
+            except Exception:
+                log.warning("Could not remove agent from temporary bridge before handoff",
+                            channel_id=session.channel_id, bridge_id=session.bridge_id)
+            await self.ari.add_to_bridge(self.bridge_id, session.channel_id)
+            await self.ari.hangup(session.ext_media_id)
+            session.rtp_sock.close()
+            _release_rtp_port(session.rtp_port)
+            await self.ari.delete(f"/bridges/{session.bridge_id}")
+            self.agent_media_session = None
+            self.call_path.record(
+                "agent_handoff",
+                extension=route.extension,
+                agent_id=route.agent_id,
+                caller_lang=caller_lang,
+                agent_lang=route.preferred_language,
+                source=route.source,
+                reason=reason,
+            )
+
+        await self._save_call(disposition="transferred", transferred_to=route.extension)
+        await self._wait_for_handoff_completion()
+        return True
+
     # ── Conversation loop ─────────────────────────────────────────────────────
 
     async def _conversation_loop(self, after_hours: bool = False):
@@ -1182,6 +1816,12 @@ class CallHandler:
         lang = self.state.caller_lang
 
         while self.state.turn_count < max_turns:
+            if self._pending_top_secret_trigger:
+                self._pending_top_secret_trigger = False
+                self.state.caller_lang = "en"
+                self.state.lang_confirmed = True
+                await self._enter_top_secret_mode("en")
+                continue
 
             # On the first turn, consume the utterance captured in _greet()
             if self.state.turn_count == 0 and hasattr(self, "_first_utterance"):
@@ -1247,9 +1887,23 @@ class CallHandler:
             self.transcript_log.append(f"Caller [{detected_lang}]: {utterance}")
             self.call_path.record("utterance", turn=self.state.turn_count, lang=detected_lang, text=utterance[:60])
 
+            if _is_top_secret_trigger(utterance):
+                await self._enter_top_secret_mode(lang)
+                continue
+
+            if _is_system_demo_trigger(utterance):
+                await self._enter_system_demo_mode(lang, reason="explicit")
+                self.state.intent = "info"
+                continue
+
             if _is_secret_game_trigger(utterance):
                 await self._enter_secret_game_mode(lang)
                 continue
+
+            if self.state.top_secret_mode:
+                handled = await self._handle_top_secret_turn(utterance, lang)
+                if handled:
+                    continue
 
             if self.state.secret_game_mode:
                 handled = await self._handle_secret_game_turn(utterance, lang)
@@ -1348,62 +2002,10 @@ class CallHandler:
 
             # ── Transfer flow ─────────────────────────────────────────
             elif intent == "transfer":
-                async with AsyncSessionLocal() as db:
-                    route = await get_route_for_intent(self.state.department, intent, db)
-
-                extension = route.extension
-                agent_lang = route.agent_lang
-                self.call_path.record(
-                    "transfer",
-                    extension=extension,
-                    department=self.state.department,
-                    match_source=route.match_source,
-                    caller_lang=lang,
-                    agent_lang=agent_lang,
-                )
-
-                dept_name = self.state.department or "the right person"
-                _transfer_msgs = {
-                    "en": f"Of course. Let me transfer you to {dept_name} right now. Please hold.",
-                    "es": f"Por supuesto. Le voy a comunicar con {dept_name} ahora mismo. Por favor espere.",
-                    "fr": f"Bien sûr. Je vous mets en relation avec {dept_name} maintenant. Veuillez patienter.",
-                    "it": f"Certo. La trasferisco a {dept_name} adesso. Un momento per favore.",
-                    "de": f"Natürlich. Ich verbinde Sie jetzt mit {dept_name}. Bitte warten Sie.",
-                    "ro": f"Desigur. Vă transfer către {dept_name} acum. Vă rog aşteptați.",
-                    "he": f"בוודאי. אני מעביר אותך ל-{dept_name} עכשיו. אנא המתן.",
-                }
-                transfer_msg = _transfer_msgs.get(lang, _transfer_msgs["en"])
-                await self._speak(transfer_msg, language=lang)
-                await asyncio.sleep(1)
-
-                need_relay = lang != agent_lang
-
-                if need_relay:
-                    agent_chan = await self.ari.dial_to_bridge(
-                        extension, self.bridge_id, settings.asterisk_app_name
-                    )
-                    agent_channel_id = agent_chan["id"] if agent_chan else None
-                    if agent_channel_id:
-                        await asyncio.sleep(2)
-                        relay = TranslationRelay(
-                            ari=self.ari,
-                            caller_channel_id=self.channel_id,
-                            agent_channel_id=agent_channel_id,
-                            bridge_id=self.bridge_id,
-                            caller_lang=lang,
-                            agent_lang=agent_lang,
-                        )
-                        asyncio.create_task(relay.run())
-                        log.info("Translation relay started",
-                                 caller_lang=lang, agent_lang=agent_lang, extension=extension)
-                    else:
-                        log.warning("dial_to_bridge failed, falling back to redirect")
-                        await self.ari.redirect_channel(self.channel_id, f"PJSIP/{extension}")
-                else:
-                    await self.ari.redirect_channel(self.channel_id, f"PJSIP/{extension}")
-
-                await self._save_call(disposition="transferred", transferred_to=extension)
-                return
+                handed_off = await self._route_to_human_agent(self.state.department, reason="intent_transfer")
+                if handed_off:
+                    return
+                continue
 
             # ── General conversation ──────────────────────────────────
             else:
@@ -1510,10 +2112,7 @@ class CallHandler:
         }
         await self._speak(FALLBACK_MSG.get(lang, FALLBACK_MSG["en"]), language=lang)
         await asyncio.sleep(0.5)
-
-        ext = settings.operator_extension
-        await self.ari.redirect_channel(self.channel_id, f"PJSIP/{ext}")
-        await self._save_call(disposition="transferred", transferred_to=ext)
+        await self._route_to_human_agent("operator", reason=f"fallback:{reason}")
 
     # ── Listen ────────────────────────────────────────────────────────────────
 
@@ -1587,16 +2186,86 @@ class CallHandler:
 
         return english_text, detected_lang
 
+    async def _listen_for_top_secret_barge_in(self, stop_event: asyncio.Event) -> bool:
+        if not self.rtp_sock:
+            return False
+        audio_buffer = bytearray()
+        speech_started = False
+        no_data_count = 0
+        total_frames = 0
+        max_frames = int(12 * 1000 / FRAME_MS)
+        loop = asyncio.get_event_loop()
+        vad = SileroVADEngine(
+            threshold=settings.vad_threshold,
+            min_silence_ms=settings.vad_min_silence_ms,
+            speech_pad_ms=settings.vad_speech_pad_ms,
+        )
+        vad.reset()
+
+        while not stop_event.is_set() and total_frames < max_frames:
+            try:
+                data = await loop.run_in_executor(
+                    None, lambda: _recv_nonblocking(self.rtp_sock.sock, 2048)
+                )
+                if data and len(data) > RTP_HEADER_SIZE:
+                    payload = _ulaw_8k_to_pcm16_16k(data[RTP_HEADER_SIZE:])
+                    no_data_count = 0
+                    vad_event = vad.process_chunk(payload)
+                    if vad_event and "start" in vad_event:
+                        speech_started = True
+                    if speech_started:
+                        audio_buffer.extend(payload)
+                    if vad_event and "end" in vad_event and speech_started:
+                        if len(audio_buffer) >= BYTES_PER_FRAME * 5:
+                            result = await loop.run_in_executor(
+                                None, transcribe_pcm, bytes(audio_buffer), SAMPLE_RATE, 1, None
+                            )
+                            if result and result.text:
+                                heard = result.text
+                                english_text = heard
+                                if result.language != "en":
+                                    english_text, _ = await ensure_english(heard, result.language)
+                                if _is_top_secret_trigger(english_text) or _is_top_secret_trigger(heard):
+                                    self._pending_top_secret_trigger = True
+                                    log.info("Top secret barge-in detected",
+                                             heard=heard[:80], translated=english_text[:80], call_id=self.call_id)
+                                    stop_event.set()
+                                    return True
+                        audio_buffer = bytearray()
+                        speech_started = False
+                        vad.reset()
+                else:
+                    await asyncio.sleep(0.02)
+                    no_data_count += 1
+                    if not speech_started and no_data_count >= int(3000 / FRAME_MS):
+                        return False
+            except Exception:
+                await asyncio.sleep(0.02)
+            total_frames += 1
+        return False
+
     # ── Speak ─────────────────────────────────────────────────────────────────
 
-    async def _speak(self, text: str, language: str = "en"):
+    async def _speak(self, text: str, language: str = "en", voice_override: str = ""):
         log.info("Speaking", text=text[:80], lang=language, call_id=self.call_id)
         self.transcript_log.append(f"Agent [{language}]: {text}")
         loop = asyncio.get_event_loop()
-        pcm = await loop.run_in_executor(None, synthesize_pcm, text, language)
+        pcm = await loop.run_in_executor(None, synthesize_pcm, text, language, voice_override)
         if pcm and self.rtp_sock:
-            await self.rtp_sock.stream_pcm(pcm)
+            stop_event = asyncio.Event()
+            barge_task = asyncio.create_task(self._listen_for_top_secret_barge_in(stop_event))
+            try:
+                await self.rtp_sock.stream_pcm(pcm, stop_event=stop_event)
+            finally:
+                stop_event.set()
+                await barge_task
             await asyncio.sleep(0.2)
+
+    async def _speak_system_demo_script(self, language: str = "en"):
+        segments = _system_demo_segments()
+        for index, segment in enumerate(segments):
+            voice = SYSTEM_DEMO_VOICE_CYCLE[index % len(SYSTEM_DEMO_VOICE_CYCLE)]
+            await self._speak(segment, language=language, voice_override=voice)
 
     # ── Media setup ───────────────────────────────────────────────────────────
 
@@ -1694,6 +2363,14 @@ class CallHandler:
         duration = (ended_at - self.started_at).total_seconds()
         self.call_path.record("teardown", duration=duration)
 
+        if self.translation_task:
+            self.translation_task.cancel()
+            try:
+                await self.translation_task
+            except Exception:
+                pass
+            self.translation_task = None
+
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
             result = await db.execute(select(CallLog).where(CallLog.call_id == self.call_id))
@@ -1726,6 +2403,27 @@ class CallHandler:
                 except Exception as _e:
                     log.error("_teardown: fallback CallLog insert failed",
                               call_id=self.call_id, error=str(_e))
+
+        if self.selected_agent_profile_id:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await release_agent_from_call(db, self.selected_agent_profile_id, self.call_id)
+            except Exception as e:
+                log.warning("Failed to release agent from busy state",
+                            agent_id=self.selected_agent_profile_id, error=str(e))
+
+        if self.agent_media_session:
+            try:
+                await self.ari.hangup(self.agent_media_session.ext_media_id)
+            except Exception:
+                pass
+            try:
+                await self.ari.delete(f"/bridges/{self.agent_media_session.bridge_id}")
+            except Exception:
+                pass
+            self.agent_media_session.rtp_sock.close()
+            _release_rtp_port(self.agent_media_session.rtp_port)
+            self.agent_media_session = None
 
         if self.ext_media_id:
             try:
@@ -1815,6 +2513,24 @@ async def run_ari_agent():
                     args = event.get("args", [])
                     called_number = args[1] if len(args) > 1 else "unknown"
 
+                    if args and args[0] == "agent-leg":
+                        token = args[1] if len(args) > 1 else ""
+                        future = _pending_agent_legs.pop(token, None)
+                        if future and not future.done():
+                            future.set_result({
+                                "channel_id": channel_id,
+                                "channel_name": channel_name,
+                                "caller_id": caller_id,
+                            })
+                            log.info("Outbound agent leg entered Stasis",
+                                     channel_id=channel_id,
+                                     extension=caller_id,
+                                     token=token[:8])
+                        else:
+                            log.warning("Agent leg arrived without pending future",
+                                        channel_id=channel_id, token=token[:8])
+                        continue
+
                     # ExternalMedia channels also enter the same Stasis app.
                     # They are transport legs, not new inbound calls.
                     if channel_name.startswith("UnicastRTP/"):
@@ -1894,92 +2610,43 @@ async def run_ari_agent():
 
 class TranslationRelay:
     """
-    Real-time bidirectional translation relay for transferred calls.
-    (Unchanged from v1.1 — see original docstring for full architecture notes.)
+    Minimal real-time bidirectional translation relay for agent handoff.
+
+    Each side stays in its own bridge with its own ExternalMedia socket:
+      - caller_sock receives caller audio and plays translated agent audio
+      - agent_sock receives agent audio and plays translated caller audio
     """
 
     def __init__(
         self,
-        ari: ARIClient,
-        caller_channel_id: str,
-        agent_channel_id: str,
-        bridge_id: str,
+        *,
+        caller_sock: RTPSocket,
+        agent_sock: RTPSocket,
         caller_lang: str,
         agent_lang: str = "en",
     ):
-        self.ari              = ari
-        self.caller_channel_id = caller_channel_id
-        self.agent_channel_id  = agent_channel_id
-        self.bridge_id         = bridge_id
-        self.caller_lang       = caller_lang
-        self.agent_lang        = agent_lang
-        self._running          = True
-        self._caller_snoop_id: str | None = None
-        self._agent_snoop_id:  str | None = None
-        self._caller_sock: RTPSocket | None = None
-        self._agent_sock:  RTPSocket | None = None
+        self.caller_sock = caller_sock
+        self.agent_sock = agent_sock
+        self.caller_lang = caller_lang
+        self.agent_lang = agent_lang
+        self._running = True
 
     async def run(self):
-        log.info("TranslationRelay starting",
-                 caller_lang=self.caller_lang, agent_lang=self.agent_lang)
+        log.info("TranslationRelay starting", caller_lang=self.caller_lang, agent_lang=self.agent_lang)
         try:
-            caller_snoop = await self.ari.snoop_channel(
-                self.caller_channel_id, app=settings.asterisk_app_name, spy="in", whisper="none"
-            )
-            agent_snoop = await self.ari.snoop_channel(
-                self.agent_channel_id, app=settings.asterisk_app_name, spy="in", whisper="none"
-            )
-
-            if not caller_snoop or not agent_snoop:
-                log.error("Failed to create snoop channels — relay aborted")
-                return
-
-            self._caller_snoop_id = caller_snoop["id"]
-            self._agent_snoop_id  = agent_snoop["id"]
-
-            caller_port = _allocate_rtp_port()
-            agent_port  = _allocate_rtp_port()
-            self._caller_sock = RTPSocket(settings.agent_rtp_host, caller_port)
-            self._agent_sock  = RTPSocket(settings.agent_rtp_host, agent_port)
-            rtp_advertise = settings.agent_rtp_advertise_host or settings.agent_rtp_host
-
-            caller_ext = await self.ari.create_external_media(
-                settings.asterisk_app_name, f"{rtp_advertise}:{caller_port}"
-            )
-            agent_ext = await self.ari.create_external_media(
-                settings.asterisk_app_name, f"{rtp_advertise}:{agent_port}"
-            )
-
-            if caller_ext:
-                await self.ari.add_to_bridge(self.bridge_id, caller_ext["id"])
-                ast_addr = await self.ari.get_channel_var(caller_ext["id"], "UNICASTRTP_LOCAL_ADDRESS")
-                ast_port = await self.ari.get_channel_var(caller_ext["id"], "UNICASTRTP_LOCAL_PORT")
-                if ast_addr and ast_port:
-                    self._caller_sock.asterisk_addr = (ast_addr, int(ast_port))
-
-            if agent_ext:
-                await self.ari.add_to_bridge(self.bridge_id, agent_ext["id"])
-                ast_addr = await self.ari.get_channel_var(agent_ext["id"], "UNICASTRTP_LOCAL_ADDRESS")
-                ast_port = await self.ari.get_channel_var(agent_ext["id"], "UNICASTRTP_LOCAL_PORT")
-                if ast_addr and ast_port:
-                    self._agent_sock.asterisk_addr = (ast_addr, int(ast_port))
-
-            log.info("TranslationRelay sockets ready",
-                     caller_port=caller_port, agent_port=agent_port)
-
             await asyncio.gather(
                 self._translate_loop(
-                    sock=self._caller_sock,
+                    sock=self.caller_sock,
                     src_lang=self.caller_lang,
                     tgt_lang=self.agent_lang,
-                    output_sock=self._agent_sock,
+                    output_sock=self.agent_sock,
                     label="caller→agent",
                 ),
                 self._translate_loop(
-                    sock=self._agent_sock,
+                    sock=self.agent_sock,
                     src_lang=self.agent_lang,
                     tgt_lang=self.caller_lang,
-                    output_sock=self._caller_sock,
+                    output_sock=self.caller_sock,
                     label="agent→caller",
                 ),
             )
@@ -1988,8 +2655,6 @@ class TranslationRelay:
             pass
         except Exception as e:
             log.error("TranslationRelay.run error", error=str(e), exc_info=True)
-        finally:
-            await self._cleanup()
 
     async def _translate_loop(self, sock, src_lang, tgt_lang, output_sock, label):
         from llm.translate_engine import translate as do_translate
@@ -2058,23 +2723,6 @@ class TranslationRelay:
                 await asyncio.sleep(0.5)
 
         log.info("Translation loop stopped", direction=label)
-
-    async def _cleanup(self):
-        for snoop_id in [self._caller_snoop_id, self._agent_snoop_id]:
-            if snoop_id:
-                try:
-                    await self.ari.hangup(snoop_id)
-                except Exception:
-                    pass
-        for sock, port in [
-            (self._caller_sock, getattr(self._caller_sock, "listen_port", None)),
-            (self._agent_sock,  getattr(self._agent_sock,  "listen_port", None)),
-        ]:
-            if sock:
-                sock.close()
-            if port:
-                _release_rtp_port(port)
-        log.info("TranslationRelay cleaned up")
 
     def stop(self):
         self._running = False

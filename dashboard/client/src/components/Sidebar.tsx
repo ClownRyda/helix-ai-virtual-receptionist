@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Radio, Voicemail } from "lucide-react";
+import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Radio, Voicemail, UsersRound } from "lucide-react";
 import { fetchJSON } from "@/lib/queryClient";
 import type { HealthStatus } from "@shared/schema";
 
@@ -8,6 +8,7 @@ const nav = [
   { href: "/",             label: "Dashboard",    icon: LayoutDashboard },
   { href: "/calls",        label: "Call Logs",    icon: Phone },
   { href: "/routing",      label: "Routing Rules",icon: GitMerge },
+  { href: "/agents",       label: "Agents",       icon: UsersRound },
   { href: "/appointments", label: "Appointments", icon: CalendarClock },
   { href: "/voicemails",   label: "Voicemails",   icon: Voicemail },
   { href: "/settings",     label: "Settings",     icon: Settings },

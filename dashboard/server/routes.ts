@@ -67,6 +67,34 @@ const mockHolidays = [
 ];
 
 const mockVoicemails: any[] = [];
+const mockAgents = [
+  {
+    id: 1,
+    agent_id: "1001",
+    display_name: "Operator One",
+    extension: "1001",
+    availability_state: "available",
+    preferred_language: "en",
+    supported_languages: ["en", "es"],
+    assigned_queues: ["operator", "general"],
+    current_call_id: null,
+    last_offered_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 2,
+    agent_id: "1002",
+    display_name: "Sales Sofia",
+    extension: "1002",
+    availability_state: "break",
+    preferred_language: "es",
+    supported_languages: ["es", "en"],
+    assigned_queues: ["sales", "billing"],
+    current_call_id: null,
+    last_offered_at: new Date(Date.now() - 1000 * 60 * 63).toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+];
 
 export async function registerRoutes(
   httpServer: Server,
@@ -113,6 +141,25 @@ export async function registerRoutes(
     const idx = mockRouting.findIndex(r => r.id === parseInt(req.params.id));
     if (idx !== -1) mockRouting.splice(idx, 1);
     res.json({ ok: true });
+  });
+
+  app.get("/api/agents", (_req, res) => res.json(mockAgents));
+  app.post("/api/agents/register", (req, res) => {
+    const agent = {
+      id: mockAgents.length + 1,
+      current_call_id: null,
+      last_offered_at: null,
+      updated_at: new Date().toISOString(),
+      ...req.body,
+    };
+    mockAgents.push(agent);
+    res.status(201).json(agent);
+  });
+  app.patch("/api/agents/:agentId", (req, res) => {
+    const agent = mockAgents.find((row) => row.agent_id === req.params.agentId);
+    if (!agent) return res.status(404).json({ error: "Not found" });
+    Object.assign(agent, req.body, { updated_at: new Date().toISOString() });
+    res.json(agent);
   });
 
   app.get("/api/appointments", (_req, res) => res.json(mockAppointments));

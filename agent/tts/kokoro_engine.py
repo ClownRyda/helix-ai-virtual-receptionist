@@ -87,7 +87,7 @@ def _get_pipeline(lang_code: str):
     return _pipelines[lang_code]
 
 
-def synthesize_pcm(text: str, language: str = "en") -> bytes:
+def synthesize_pcm(text: str, language: str = "en", voice_override: str = "") -> bytes:
     """
     Synthesize text to raw PCM16 audio at 16 kHz (slin16) for Asterisk.
 
@@ -96,6 +96,7 @@ def synthesize_pcm(text: str, language: str = "en") -> bytes:
     Args:
         text:     Text to speak.
         language: ISO 639-1 language code ("en", "es", "fr", "it", "de", "ro", "he").
+        voice_override: Explicit Kokoro voice name for this synthesis call.
 
     Returns:
         Raw 16-bit signed PCM bytes at 16000 Hz, mono.
@@ -111,7 +112,9 @@ def synthesize_pcm(text: str, language: str = "en") -> bytes:
     voice     = KOKORO_VOICE.get(language, "af_heart")
 
     # Allow per-language voice override from settings
-    voice_override = getattr(settings, f"kokoro_voice_{language}", "") or ""
+    configured_voice_override = getattr(settings, f"kokoro_voice_{language}", "") or ""
+    if configured_voice_override:
+        voice = configured_voice_override
     if voice_override:
         voice = voice_override
 
