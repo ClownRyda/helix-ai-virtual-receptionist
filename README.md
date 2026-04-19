@@ -7,13 +7,13 @@
 ![Ollama](https://img.shields.io/badge/LLM-ollama%20local-purple)
 ![Stars](https://img.shields.io/github/stars/BB-AI-Arena/helix-ai-virtual-receptionist?style=flat)
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history. · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
+**A fully local, self-hosted AI phone receptionist — no cloud APIs, no subscriptions, no vendor lock-in.**
 
-A fully local, self-hosted AI phone receptionist. Answers calls, respects your business hours, handles after-hours callers gracefully, detects intent, schedules callbacks via Google Calendar, transfers calls to the right person, speaks 7 languages (EN, ES, FR, IT, DE, RO, HE) — all without any cloud APIs.
+Helix answers calls 24/7, detects intent in natural conversation, speaks 7 languages, schedules callbacks via Google Calendar, routes callers to the right person, and live-translates across language barriers during transfers — all on your own hardware.
 
-**Server:** Ubuntu 22.04 + RTX 4090 GPU  
-**Testing:** Docker Desktop on Windows or native install on Ubuntu  
-**No subscriptions. No cloud. Everything runs on your hardware.**
+> **Proven working on bare-metal Ubuntu 24.04 with an RTX 4090. Remote callers on WAN (Zoiper on mobile data) can hear the AI greeting and have a full conversation.**
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
 
 ---
 
@@ -25,7 +25,7 @@ Caller dials in
 VIP caller? → direct to operator (no AI)
       ↓
 Business hours / holiday check
-  ├── Open → normal AI greeting
+  ├── Open  → normal AI greeting
   └── Closed → after-hours message
            ├── callback  → speak hours, say goodbye
            ├── voicemail → record + transcribe message
@@ -35,7 +35,7 @@ Business hours / holiday check
 AI greets caller in English
       ↓
 Whisper detects language (EN, ES, FR, IT, DE, RO, HE)
-If Spanish → replay greeting in Spanish
+If non-English detected → greeting replays in caller's language
       ↓
 DTMF menu announced (if enabled) — press 1/2/0 or just speak
       ↓
@@ -81,8 +81,8 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
                          │
                     REST API
                          │
-               React Dashboard (:3000)
-               call logs · routing · appointments · holidays · settings
+               React Dashboard (:3001 → nginx :80)
+               call logs · routing · appointments · holidays · voicemails · settings · agents
 ```
 
 ---
@@ -91,21 +91,19 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
 
 ### Business hours & holiday management
 - Timezone-aware business hours check (configurable start/end hour)
-- Weekend detection (automatically closed Sat/Sun)
+- Weekend detection — automatically closed Sat/Sun
 - Holiday table in the database — add/remove via dashboard or API (`GET/POST/DELETE /api/holidays`)
 - Hard-override holiday list in `.env` (`HOLIDAY_DATES=2026-12-25,2027-01-01`)
 - Four after-hours modes: **callback**, **voicemail**, **schedule**, **emergency**
 
 ### 7-language support
-- Greeting plays in English; Whisper detects language from caller's first response
-- If a non-English language is detected (ES, FR, IT, DE, RO, HE) → greeting replays in that language; full conversation continues in the caller's language
-- All prompts, retry messages, DTMF menus, after-hours messages, and operator fallback are localized in all 7 languages
-- Greeting tells caller "no buttons to press — just speak naturally"
-- All AI responses generated directly in the caller's detected language
-- TTS voices: Kokoro neural voices for EN/ES/FR/IT — espeak-ng for DE/RO/HE (no Kokoro voice available)
+- Greeting plays in English; Whisper detects language from the caller's first response
+- Non-English detected (ES, FR, IT, DE, RO, HE) → greeting replays in that language; full conversation continues in the caller's language
+- All prompts, retry messages, DTMF menus, after-hours messages, and operator fallback localized in all 7 languages
+- TTS voices: Kokoro neural voices for EN/ES/FR/IT — espeak-ng for DE/RO/HE
 
 ### Live translation relay (during transfers)
-After a call is transferred to a live person, if the caller and the agent speak different languages, a **TranslationRelay** starts automatically — both parties just speak normally:
+After a call is transferred to a live person, if the caller and agent speak different languages, a **TranslationRelay** starts automatically — both parties just speak normally:
 
 ```
 Caller (ES) ──speaks──▶ caller_snoop channel
@@ -122,7 +120,7 @@ Agent (EN) ──speaks──▶ agent_snoop channel
 Two isolated snoop channels prevent audio mixing. Relay only starts when `caller_lang ≠ agent_lang` — same-language transfers have zero overhead.
 
 ### Retry / fallback logic
-- Silence → localized retry prompt in caller's language ("I didn't catch that…" in EN/ES/FR/IT/DE/RO/HE)
+- Silence → localized retry prompt in caller's language ("I didn't catch that…" in all 7 languages)
 - After `MAX_RETRIES` consecutive silences → graceful transfer to operator
 - After 2 consecutive unknown/unclear intents → graceful transfer to operator
 - No dead air — the caller always hears a spoken handoff
@@ -149,15 +147,15 @@ Google Calendar free/busy lookup, slot generation, and event booking — all in 
 ### Extension routing
 Rules stored in SQLite, editable live via the dashboard. Each rule stores the language of the agent at that extension — relay activates automatically on mismatch.
 
-### Optional feature flags (all off by default)
+### Optional feature flags
+
+All three flags are off by default and degrade gracefully when disabled.
 
 | Flag | What it does |
 |---|---|
 | `VOICEMAIL_ENABLED` | Records after-hours messages as WAV; optional Whisper transcription; stored in DB |
 | `CALL_SUMMARY_ENABLED` | LLM writes a 2-3 sentence post-call summary into `CallLog.summary` |
 | `FAQ_ENABLED` | Keyword-matches caller utterances against `FAQ_FILE` (plain text); matching lines injected into LLM context |
-
-All three degrade gracefully when disabled — no errors, no changed behavior.
 
 ---
 
@@ -190,22 +188,22 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 The wizard will:
 - Prompt for business name, timezone, hours, passwords, IP, extensions
 - Write `agent/.env`, `ari.conf`, and `pjsip.conf` automatically
-- Installs Kokoro TTS and all dependencies; detects and reuses existing Ollama
+- Install Kokoro TTS and all dependencies; detect and reuse existing Ollama
 - Guide you through Google Calendar OAuth
 - Validate that all services are reachable
 
-### Step 2 — Start (if not already running)
+### Step 2 — Start services
 
 **Linux (Docker):**
 ```bash
-# One-time: open required firewall ports (SIP 5060, RTP 10000-20100, ARI 8088, API 8000, Dashboard 3000)
+# One-time: open required firewall ports (SIP 5060, RTP 10000-20100, ARI 8088, API 8000, Dashboard 3001)
 bash scripts/firewall.sh YOUR_LAN_SUBNET   # e.g. 192.168.1.0/24
 
-./deploy.sh --pull   # first run: builds containers + pulls Ollama model (takes a few minutes)
+./deploy.sh --pull   # first run: builds containers + pulls Ollama model
 ./deploy.sh          # subsequent runs
 ```
 
-`deploy.sh` handles: building Docker images, starting all 4 services (Asterisk, Ollama, agent, dashboard), waiting for each to become healthy, and printing a summary of URLs and extensions when ready.
+`deploy.sh` builds Docker images, starts all 4 services (Asterisk, Ollama, agent, dashboard), waits for each to become healthy, then prints a summary of URLs and extensions.
 
 **Windows (Docker Desktop):**
 ```powershell
@@ -213,7 +211,7 @@ bash scripts/firewall.sh YOUR_LAN_SUBNET   # e.g. 192.168.1.0/24
 .\deploy-windows.ps1         # subsequent runs
 ```
 
-**Linux (Native — no Docker):**
+**Linux (native — no Docker):**
 ```bash
 # 1. System dependencies
 sudo apt-get update
@@ -223,13 +221,12 @@ sudo apt-get install -y asterisk python3.11 python3.11-venv python3-pip espeak-n
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.1:8b
 
-# 3. Install Kokoro TTS (via pip — model weights download automatically on first use)
-#    Run the onboarding wizard — it installs everything for you:
+# 3. Run the onboarding wizard (installs Kokoro + all Python deps)
 bash scripts/onboard.sh
 
 # 4. Copy Asterisk config files
 sudo cp -r asterisk/etc/asterisk/* /etc/asterisk/
-sudo asterisk -rx "core reload"   # or: sudo systemctl restart asterisk
+sudo asterisk -rx "core reload"
 
 # 5. Python virtualenv + dependencies
 cd agent
@@ -305,10 +302,6 @@ cp agent/.env.example agent/.env
 | `KOKORO_VOICE_FR` | `ff_siwis` | Kokoro voice — French |
 | `KOKORO_VOICE_IT` | `if_sara` | Kokoro voice — Italian |
 | _(DE/RO/HE)_ | _(espeak-ng)_ | espeak-ng handles DE, RO, HE automatically |
-| `KOKORO_VOICE_EN` | `af_heart` | Kokoro voice for English |
-| `KOKORO_VOICE_ES` | `ef_dora` | Kokoro voice for Spanish |
-| `KOKORO_VOICE_FR` | `ff_siwis` | Kokoro voice for French |
-| `KOKORO_VOICE_IT` | `if_sara` | Kokoro voice for Italian |
 | `AUTO_DETECT_LANGUAGE` | `true` | Auto-detect caller language via Whisper |
 
 #### Business hours & after-hours
@@ -359,6 +352,7 @@ cp agent/.env.example agent/.env
 | `GET` | `/api/calls` | List call logs |
 | `GET` | `/api/calls/{id}` | Call detail + transcript + call-path JSON + summary |
 | `GET` | `/api/stats` | Aggregate call stats |
+| `GET` | `/api/stats/daily` | Per-day call counts for last 7 days |
 | `GET` | `/api/rules` | List routing rules |
 | `POST` | `/api/rules` | Create/update routing rule |
 | `PUT` | `/api/rules/{id}` | Update routing rule |
@@ -373,7 +367,7 @@ cp agent/.env.example agent/.env
 | `GET` | `/api/voicemails` | List voicemail messages |
 | `GET` | `/api/voicemails/{id}` | Voicemail detail + transcript |
 | `PATCH` | `/api/voicemails/{id}` | Update voicemail status (unread/read/archived) |
-| `GET` | `/api/health` | Health check + version + feature flags |
+| `GET` | `/api/health` | Health check + version + feature flags + TTS engine |
 
 ---
 
@@ -422,252 +416,24 @@ See **[docs/zoiper-setup.md](docs/zoiper-setup.md)** for full instructions.
 
 ## Dashboard
 
-Access at `http://YOUR_SERVER_IP:3000` (server) or `http://localhost:3000` (Docker Desktop).
+Access at `http://YOUR_SERVER_IP` (nginx port 80 in production) or `http://localhost:3001` (direct).
 
 | Page | What it shows |
 |---|---|
-| Dashboard | Live stats: total calls, scheduled, transferred, after-hours, avg duration |
+| Dashboard | Live stats: total calls, scheduled, transferred, after-hours, avg duration; 7-day call volume sparkline |
 | Call Logs | Searchable call history with intent and disposition badges |
 | Call Detail | Full transcript + structured call-path events + LLM summary |
 | Routing | Keyword → extension rules with agent language (inline CRUD) |
 | Appointments | Scheduled callbacks with Google Calendar status |
+| Voicemails | After-hours voicemail inbox with status badges, transcript, and archive actions |
+| Agents | Agent roster — extensions, languages, routing assignments |
 | Settings | Current agent configuration — all feature flags, business hours, TTS, LLM settings |
 
 ---
 
-## Project Structure
+## Remote / WAN Callers
 
-```
-helix-ai-virtual-receptionist/
-├── agent/
-│   ├── main.py                  Entry point — FastAPI + ARI agent
-│   ├── ari_agent.py             Core call handler, business hours gate, retries,
-│   │                            DTMF, VIP routing, CallPath logger, voicemail,
-│   │                            TranslationRelay
-│   ├── api.py                   REST API — calls, routing, holidays, config, voicemails
-│   ├── config.py                All settings (Pydantic + .env), 15 new v1.2 settings
-│   ├── database.py              SQLAlchemy models: CallLog, Appointment, RoutingRule,
-│   │                            Holiday, VoicemailMessage
-│   ├── .env.example             Fully documented template — copy to .env and edit
-│   ├── stt/
-│   │   └── whisper_engine.py    faster-whisper STT, returns text + detected language
-│   ├── tts/
-│   │   └── kokoro_engine.py     Kokoro TTS (EN/ES/FR/IT) + espeak-ng (DE/RO/HE)
-│   ├── llm/
-│   │   ├── intent_engine.py     Ollama intent detection, FAQ loader, call summary
-│   │   └── translate_engine.py  EN ↔ ES translation via Ollama (local)
-│   ├── vad/
-│   │   └── silero_engine.py     Silero VAD for real-time speech detection
-│   ├── calendar/
-│   │   └── gcal.py              Google Calendar free/busy + booking
-│   └── routing/
-│       └── router.py            DB-backed routing + VIP route + after-hours route
-├── asterisk/
-│   └── etc/asterisk/
-│       ├── pjsip.conf           SIP extensions + NAT config
-│       ├── extensions.conf      Dialplan: 9999 → AI, internal ext-to-ext, [dtmf-menu]
-│       ├── ari.conf             ARI credentials
-│       ├── http.conf            ARI HTTP server
-│       └── rtp.conf             RTP port range (10000–20000)
-├── dashboard/
-│   ├── client/src/pages/        React pages (Dashboard, CallLogs, Routing, Appointments, Settings)
-│   └── server/                  Express API proxy + mock data (holidays, voicemails, config PATCH)
-├── docker/
-│   ├── docker-compose.yml       Linux/Ubuntu (GPU, host networking)
-│   ├── docker-compose.windows.yml  Windows Docker Desktop (bridge networking)
-│   ├── Dockerfile.agent         CUDA base for GPU Whisper
-│   ├── Dockerfile.agent.windows CPU-only agent for Windows testing
-│   ├── Dockerfile.asterisk      Asterisk on Ubuntu 22.04
-│   └── Dockerfile.dashboard     Node.js dashboard
-├── docs/
-│   └── zoiper-setup.md          Step-by-step Zoiper softphone guide
-├── scripts/
-│   ├── onboard.sh               Interactive first-time setup wizard (Linux/macOS)
-│   ├── onboard-windows.ps1      Interactive first-time setup wizard (Windows PowerShell)
-│   ├── setup.sh                 Legacy bare-metal install helper
-│   └── firewall.sh              UFW rules for Ubuntu server
-├── deploy.sh                    One-shot Linux deploy script
-└── deploy-windows.ps1           One-shot Windows PowerShell deploy script
-```
-
----
-
-## Hardware Requirements
-
-**GPU is optional.** Helix AI runs on CPU-only hardware — Whisper is slower (~3-5s per utterance vs sub-second on GPU) but fully functional. The onboarding wizard asks which mode you want.
-
-| Component | Minimum | Recommended |
-|---|---|---|
-| GPU | None required (CPU mode works) | NVIDIA RTX 3080+ (CUDA) |
-| RAM | 8 GB | 16 GB+ |
-| OS | Ubuntu 22.04 | Ubuntu 24.04 (tested/proven) |
-| Disk | 10 GB | 20 GB (models + voicemail recordings) |
-
-**Model VRAM footprint (GPU mode):**
-
-| Component | Model | VRAM |
-|---|---|---|
-| STT | faster-whisper base (multilingual) | ~150 MB |
-| LLM | llama3.1:8b | ~5 GB |
-| TTS | Kokoro TTS (runs on CPU — no GPU needed) | 0 |
-| **Total** | | **~5.2 GB** |
-
-RTX 4090 (24 GB) handles everything with room to spare. RTX 3080 (10 GB) works fine.  
-CPU-only mode: set `WHISPER_DEVICE=cpu` in `.env` (or choose option 2 in the onboarding wizard). Expect 3-5 second STT latency instead of sub-second.
-
-**CUDA on Ubuntu 24.04:** If Whisper fails with `libcublas.so.12: cannot open shared object file`, install the missing library: `sudo apt install libcublas12`. This is a known gap between the CUDA toolkit and the Ubuntu 24.04 package split.  
-Windows Docker Desktop testing always runs on CPU — slower but functional for development.
-
----
-
-## Built with
-
-| Layer | Technology |
-|---|---|
-| Telephony | [Asterisk 20](https://www.asterisk.org/) + PJSIP + ARI WebSocket |
-| Call control | Python asyncio + `aiohttp` ARI client |
-| Speech-to-text | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (multilingual, GPU) |
-| Voice activity | [Silero VAD](https://github.com/snakers4/silero-vad) |
-| LLM | [Ollama](https://ollama.com/) — `llama3.1:8b` (local, no cloud) |
-| Text-to-speech | [Kokoro TTS](https://github.com/hexgrad/kokoro) — 82M parameter neural voices (EN/ES/FR/IT) + espeak-ng for DE/RO/HE |
-| Scheduling | Google Calendar API (OAuth2) |
-| Database | SQLite + SQLAlchemy async |
-| API | FastAPI |
-| Dashboard | React + Tailwind + shadcn/ui + Express |
-
----
-
-## Roadmap
-
-### ✅ Shipped
-
-| Version | Feature |
-|---|---|
-| v1.0 | Asterisk PBX + ARI WebSocket integration |
-| v1.0 | Whisper STT + Silero VAD |
-| v1.0 | Ollama LLM (llama3.1:8b) intent detection + conversation |
-| v1.0 | Neural TTS voice synthesis |
-| v1.0 | Google Calendar scheduling (OAuth2) |
-| v1.0 | SQLite call log + routing rules |
-| v1.0 | React dashboard (calls, routing, appointments) |
-| v1.0 | Docker (Linux GPU) + Docker Desktop (Windows CPU) |
-| v1.1 | Bilingual EN/ES — auto language detection + replay greeting |
-| v1.1 | Live translation relay during transfers (both parties hear own language) |
-| v1.1 | CHANGELOG baseline + v1.0/v1.1 tags |
-| v1.2 | Business hours gate + timezone-aware scheduling |
-| v1.2 | Holiday management (DB + `.env` override + dashboard CRUD) |
-| v1.2 | After-hours modes: callback / voicemail / schedule / emergency |
-| v1.2 | Retry logic — localized silence prompts, max-retry operator fallback |
-| v1.2 | DTMF keypress fallback menu |
-| v1.2 | VIP caller routing (bypass AI → direct to operator) |
-| v1.2 | Structured call-path logging (JSON stored per call) |
-| v1.2 | Optional voicemail recording + Whisper transcription |
-| v1.2 | Optional LLM post-call summary |
-| v1.2 | Optional FAQ / knowledge-base lookup |
-| v1.2 | Dashboard overhaul — 12+ panels (stats, routing, holidays, voicemails, config, health) |
-| v1.3 | Interactive onboarding wizard — `scripts/onboard.sh` (Linux/macOS) |
-| v1.3 | Interactive onboarding wizard — `scripts/onboard-windows.ps1` (Windows) |
-| v1.3 | Wizard writes `.env`, `ari.conf`, `pjsip.conf` automatically |
-| v1.4 | 7-language support: EN, ES, FR, IT, DE, RO, HE |
-| v1.4 | Multilingual TTS voices for FR / IT / DE / RO |
-| v1.4 | espeak-ng fallback for Hebrew |
-| v1.6 | Kokoro TTS (82M parameter neural model) replaces Piper TTS |
-| v1.6 | onboard.sh is now a full system installer (Docker + native) |
-| v1.6 | Automatic Ollama detection — reuses existing local instance |
-| v1.4 | All prompts, greetings, after-hours messages, DTMF menus localized in 7 languages |
-| v1.6.1 | Production bare-metal hardening — all services bind to 127.0.0.1 |
-| v1.6.1 | systemd units for agent, dashboard, and Ollama service override reference |
-| v1.6.1 | nginx reverse proxy config (/, /api/ — ARI stays loopback-only) |
-| v1.6.1 | logrotate config for Asterisk logs (14-day retention) |
-| v1.6.1 | SQLite online backup script with 14-day rolling retention |
-| v1.6.2 | `onboard.sh` true one-shot installer with full system setup |
-| v1.6.3 | Docker hardening |
-| v1.6.4 | pjsip.conf placeholder fixes, dashboard build, nginx `$connection_upgrade` map |
-| v1.6.5 | `package-lock.json` committed, `npm ci` fallback, `VOICEMAIL_ENABLED` auto-set |
-| v1.6.6 | `api_cors_origins` added to Settings |
-| v1.6.7 | `agent/calendar/` → `agent/gcal/` (fixes Python stdlib shadow crash) |
-| v1.6.7 | `onboard.sh`: rsync stale-dir cleanup, port conflict check (3000/Open WebUI) |
-| v1.6.8 | Asterisk module path auto-detected for Ubuntu 24.04 multiarch layout |
-| v1.6.8 | Dashboard API base changed to same-origin `/api/` — LAN browser access fixed |
-| v1.6.8 | Dashboard Router scope fix — sidebar navigation works correctly |
-| v1.6.9 | SQLite data dir, voicemail spool dir, `chan_sip` disabled |
-| v1.7.0 | Silero VAD `trust_repo=True` — no more interactive trust prompt crash |
-| v1.7.0 | `/api/config` returns Kokoro voices (was returning stale Piper fields) |
-| v1.7.0 | `.env` migration script + `ARI_URL` obsolete key warning |
-| v1.7.0 | `update-live-install.sh` — safe in-place upgrade script |
-| v1.7.1 | `_setup_media()` step-level logging; ARI HTTP error logging |
-| v1.7.2 | `StasisEnd` no longer cancels call handler during bridge transition |
-| v1.7.3 | `asyncio.sleep(0)` after `create_task` — handler starts before next WS message |
-| v1.7.4 | Initial `CallLog` DB insert backgrounded — `_setup_media()` no longer blocked |
-| v1.7.5 | `ChannelHangupRequest` no longer cancels handler — true silent call root cause fixed |
-| v1.8.0 | ExternalMedia codec switched to PCMU/ulaw; PCM16↔ulaw transcode helpers |
-| v1.8.0 | RTP streamed at real-time 20 ms pacing (was burst-then-sleep) |
-| v1.8.0 | `UnicastRTP/...` StasisStart events ignored (were spawning fake call handlers) |
-| v1.8.0 | Whisper + Kokoro + Silero VAD all prewarmed at startup |
-| v1.8.0 | `onboard.sh`: WAN IP auto-detection → `external_media_address` in `pjsip.conf` |
-| v1.8.0 | `onboard.sh`: explicit final `chown -R helix:helix /opt/helix` pass |
-| v1.8.0 | Dashboard: Voicemail inbox page with status badges, transcript, archive actions |
-| v1.8.0 | Dashboard: 7-day call volume sparkline on home page |
-| v1.8.0 | Dashboard: sidebar footer pulls live version + TTS engine from `/api/health` |
-| v1.8.0 | `/api/stats/daily` endpoint: per-day call counts for last 7 days |
-| v1.8.0 | README: Remote/WAN callers section; file ownership model documented |
-| v1.8.0 | Secret game mode: 20-questions style guessing game with structured profile, candidate tracking, anti-repeat logic, agitation behavior |
-| v1.6.1 | CORS hardened — configurable `API_CORS_ORIGINS` env var (no more wildcard) |
-| v1.6.1 | RTP port overlap fix: Asterisk 10000-19999, Agent 20000-20100 |
-| v1.6.1 | `asterisk/etc/asterisk/logger.conf` added (was missing — no disk logs without it) |
-| v1.6.2 | `onboard.sh` Step 11: creates helix user, installs systemd units, nginx, locks .env |
-| v1.6.2 | Firewall fix: no longer opens ARI/API/dashboard ports (loopback-only, behind nginx) |
-| v1.6.2 | Native install next-steps updated to reference systemd + log tail commands |
-| v1.6.3 | Docker dashboard no longer exposes port 3000 to network (loopback + nginx) |
-| v1.6.3 | Dockerfile.asterisk + docker-compose RTP range fixed: 10000-19999 (no overlap) |
-| v1.6.3 | Dockerfile.agent: Python 3.12 → 3.11, Ubuntu 24.04 (matches native installer) |
-| v1.6.3 | deploy.sh no longer advertises ARI/Ollama as public URLs in post-start summary |
-| v1.6.4 | onboard.sh: pjsip.conf placeholder names corrected (silent SIP config failure fixed) |
-| v1.6.4 | onboard.sh: dashboard npm ci + npm run build added before systemd enable |
-| v1.6.4 | nginx: $connection_upgrade map extracted to deploy/nginx-helix-map.conf (nginx -t fix) |
-| v1.6.4 | onboard.sh installs nginx-helix-map.conf to conf.d/ before nginx config test |
-| v1.6.5 | dashboard/package-lock.json committed — npm ci now works on fresh clones |
-| v1.6.5 | onboard.sh: npm ci with lockfile fallback to npm install if lockfile absent |
-| v1.6.5 | onboard.sh: VOICEMAIL_ENABLED=true auto-set when after-hours mode is voicemail |
-| v1.6.6 | agent/config.py: api_cors_origins field added — pydantic crash on startup fixed |
-| v1.7.0 | agent/calendar/ renamed to agent/gcal/ — Python stdlib shadowing bug fixed |
-| v1.7.0 | onboard.sh: removes stale agent/calendar/ before rsync so shadow cannot survive upgrades |
-| v1.7.0 | onboard.sh: pre-flight port check — detects port 3000 conflict and prompts for alternate |
-| v1.7.0 | onboard.sh: creates agent/data/ and /var/spool/helix/voicemail/ — SQLite/voicemail crash fixed |
-| v1.7.0 | asterisk/modules.conf: chan_sip disabled — PJSIP-only stack, no SIP port conflict |
-| v1.7.0 | agent/vad/silero_engine.py: trust_repo=True — EOFError/ARI flap on first call fixed |
-| v1.7.0 | agent/api.py: piper_model removed, Kokoro voices exposed in /api/config |
-| v1.7.0 | scripts/onboard.sh: obsolete .env keys (ARI_URL, PIPER_MODEL) auto-removed on upgrade |
-| v1.7.0 | scripts/update-live-install.sh: safe in-place upgrade script added |
-| v1.7.0 | scripts/fix-live-env.sh: .env normalization/migration script added |
-| v1.7.0 | asterisk.conf: hardcoded astmoddir removed — onboard.sh auto-detects correct module path |
-| v1.7.0 | dashboard: API base changed to same-origin /api/ — LAN access now works correctly |
-| v1.7.0 | dashboard: Router wrapper moved to include Sidebar — navigation fixed |
-| v1.7.1 | agent/ari_agent.py: granular _setup_media() step logging + ARI HTTP error logging |
-| v1.7.1 | agent/ari_agent.py: None guards on bridge_id/ext_media_id/rtp_sock in _setup_media() |
-| v1.7.2 | agent/ari_agent.py: StasisEnd no longer cancels call handler (bridge transition fix) |
-| v1.7.3 | agent/ari_agent.py: asyncio.sleep(0) after create_task so handler starts immediately |
-| v1.7.4 | agent/ari_agent.py: initial CallLog insert backgrounded — _setup_media() no longer blocked |
-| v1.7.4 | agent/ari_agent.py: _teardown() fallback insert prevents lost records on short calls |
-| v1.7.5 | agent/ari_agent.py: ChannelHangupRequest no longer cancels handler — true silent call fix |
-| v1.8.0 | scripts/onboard.sh: WAN IP auto-detection + external_media_address injection |
-| v1.8.0 | scripts/onboard.sh: explicit /opt/helix chown pass + .cache dir creation |
-| v1.8.0 | agent/api.py: /api/health returns tts_engine + version; /api/stats/daily added |
-| v1.8.0 | agent/main.py: Silero VAD prewarm at startup |
-| v1.8.0 | dashboard: Sidebar footer pulls version + TTS engine from /api/health |
-| v1.8.0 | dashboard: Voicemail inbox page (Voicemails.tsx) + sidebar nav entry |
-| v1.8.0 | dashboard: 7-day call volume sparkline on Dashboard home |
-| v1.8.0 | README: Remote/WAN callers section |
-
----
-
-
-## Remote / WAN Callers (Zoiper, External Softphones)
-
-If your softphone is on a different network (mobile data, remote office, VPN),
-Asterisk must advertise your **public WAN IP** in SDP — not your LAN IP.
-Without this, the remote phone receives `c=IN IP4 192.168.x.x` and media
-never arrives (silent call from both sides).
+If your softphone is on a different network (mobile data, remote office, VPN), Asterisk must advertise your **public WAN IP** in SDP — not your LAN IP. Without this, the remote phone receives `c=IN IP4 192.168.x.x` and media never arrives (silent call from both sides).
 
 ### Symptom
 - Call connects (SIP 200 OK), agent appears to answer
@@ -698,24 +464,19 @@ Reload Asterisk after editing:
 sudo asterisk -rx "module reload res_pjsip.so"
 ```
 
-**`onboard.sh` (v1.8.0+) auto-detects your WAN IP and prompts you to confirm
-it before writing `pjsip.conf`.**  For existing installs, edit `pjsip.conf`
-manually and reload.
+**`onboard.sh` (v1.8.0+) auto-detects your WAN IP and prompts you to confirm it before writing `pjsip.conf`.** For existing installs, edit `pjsip.conf` manually and reload.
 
 ### Firewall
-Ensure UDP 10000–20000 (RTP) and UDP 5060 (SIP) are open to the internet:
 ```bash
 sudo ufw allow 5060/udp
 sudo ufw allow 10000:20000/udp
 ```
 
 ---
+
 ## File Ownership After Manual Deploys
 
-When copying files into `/opt/helix/` manually, always restore service-critical
-ownership afterward. The `helix` system user must own `.env`, the SQLite data
-directory, and the model cache — or the agent crashes on startup with
-`PermissionError` / `sqlite3.OperationalError`.
+When copying files into `/opt/helix/` manually, always restore service-critical ownership afterward. The `helix` system user must own `.env`, the SQLite data directory, and the model cache — or the agent crashes on startup with `PermissionError` / `sqlite3.OperationalError`.
 
 **Post-deploy fixup (run after every manual `cp`):**
 
@@ -731,7 +492,7 @@ sudo systemctl restart helix-agent
 
 | Path | Owner | Why |
 |---|---|---|
-| `/opt/helix/` (dir) | `bradshaw:bradshaw` | Admin can write files without sudo |
+| `/opt/helix/` (dir) | `youruser:youruser` | Admin can write files without sudo |
 | `/opt/helix/agent/.env` | `helix:helix` | Agent reads secrets at startup |
 | `/opt/helix/agent/data/` | `helix:helix` | SQLite database writes |
 | `/opt/helix/agent/data/pbx_assistant.db` | `helix:helix` | SQLite database writes |
@@ -789,7 +550,7 @@ See `systemd/ollama.service.reference` for exact override instructions.
 ### 7 — Firewall
 ```bash
 bash scripts/firewall.sh   # Opens SIP (5060), RTP (10000-20100), HTTP (80), HTTPS (443)
-                            # Agent (8000), ARI (8088), Dashboard (3000) stay loopback-only
+                            # Agent (8000), ARI (8088), Dashboard (3001) stay loopback-only
 ```
 
 ### Port map (production)
@@ -806,15 +567,135 @@ bash scripts/firewall.sh   # Opens SIP (5060), RTP (10000-20100), HTTP (80), HTT
 
 ---
 
-### 🔜 Planned
+## Project Structure
 
-- [ ] **CUDA Whisper on Ubuntu 24.04** — verify `libcublas12` install path in `onboard.sh` so GPU STT works out of the box
+```
+helix-ai-virtual-receptionist/
+├── agent/
+│   ├── main.py                  Entry point — FastAPI + ARI agent
+│   ├── ari_agent.py             Core call handler, business hours gate, retries,
+│   │                            DTMF, VIP routing, CallPath logger, voicemail,
+│   │                            TranslationRelay
+│   ├── agents.py                Agent roster — extensions, languages, assignments
+│   ├── api.py                   REST API — calls, routing, holidays, config, voicemails
+│   ├── config.py                All settings (Pydantic + .env)
+│   ├── database.py              SQLAlchemy models: CallLog, Appointment, RoutingRule,
+│   │                            Holiday, VoicemailMessage
+│   ├── .env.example             Fully documented template — copy to .env and edit
+│   ├── stt/
+│   │   └── whisper_engine.py    faster-whisper STT, returns text + detected language
+│   ├── tts/
+│   │   └── kokoro_engine.py     Kokoro TTS (EN/ES/FR/IT) + espeak-ng (DE/RO/HE)
+│   ├── llm/
+│   │   ├── intent_engine.py     Ollama intent detection, FAQ loader, call summary
+│   │   └── translate_engine.py  EN ↔ ES translation via Ollama (local)
+│   ├── vad/
+│   │   └── silero_engine.py     Silero VAD for real-time speech detection
+│   ├── gcal/
+│   │   └── gcal.py              Google Calendar free/busy + booking
+│   └── routing/
+│       └── router.py            DB-backed routing + VIP route + after-hours route
+├── asterisk/
+│   └── etc/asterisk/
+│       ├── pjsip.conf           SIP extensions + NAT config
+│       ├── extensions.conf      Dialplan: 9999 → AI, internal ext-to-ext, [dtmf-menu]
+│       ├── ari.conf             ARI credentials
+│       ├── http.conf            ARI HTTP server
+│       └── rtp.conf             RTP port range (10000–20000)
+├── dashboard/
+│   ├── client/src/pages/        React pages (Dashboard, CallLogs, Routing, Appointments,
+│   │                            Voicemails, Agents, Settings)
+│   └── server/                  Express API proxy (holidays, voicemails, config PATCH)
+├── docker/
+│   ├── docker-compose.yml       Linux/Ubuntu (GPU, host networking)
+│   ├── docker-compose.windows.yml  Windows Docker Desktop (bridge networking)
+│   ├── Dockerfile.agent         CUDA base for GPU Whisper
+│   ├── Dockerfile.agent.windows CPU-only agent for Windows testing
+│   ├── Dockerfile.asterisk      Asterisk on Ubuntu 22.04
+│   └── Dockerfile.dashboard     Node.js dashboard
+├── docs/
+│   └── zoiper-setup.md          Step-by-step Zoiper softphone guide
+├── scripts/
+│   ├── onboard.sh               Interactive first-time setup wizard (Linux/macOS)
+│   ├── onboard-windows.ps1      Interactive first-time setup wizard (Windows PowerShell)
+│   ├── setup.sh                 Legacy bare-metal install helper
+│   └── firewall.sh              UFW rules for Ubuntu server
+├── deploy.sh                    One-shot Linux deploy script
+└── deploy-windows.ps1           One-shot Windows PowerShell deploy script
+```
+
+---
+
+## Hardware Requirements
+
+**GPU is optional.** Helix runs on CPU-only hardware — Whisper is slower (~3-5s per utterance vs sub-second on GPU) but fully functional. The onboarding wizard asks which mode you want.
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| GPU | None required (CPU mode works) | NVIDIA RTX 3080+ (CUDA) |
+| RAM | 8 GB | 16 GB+ |
+| OS | Ubuntu 22.04 | Ubuntu 24.04 (tested/proven) |
+| Disk | 10 GB | 20 GB (models + voicemail recordings) |
+
+**Model VRAM footprint (GPU mode):**
+
+| Component | Model | VRAM |
+|---|---|---|
+| STT | faster-whisper base (multilingual) | ~150 MB |
+| LLM | llama3.1:8b | ~5 GB |
+| TTS | Kokoro TTS (runs on CPU) | 0 |
+| **Total** | | **~5.2 GB** |
+
+RTX 4090 (24 GB) handles everything with room to spare. RTX 3080 (10 GB) works fine.
+
+CPU-only mode: set `WHISPER_DEVICE=cpu` in `.env` (or choose option 2 in the onboarding wizard). Expect 3-5 second STT latency instead of sub-second.
+
+**CUDA on Ubuntu 24.04:** If Whisper fails with `libcublas.so.12: cannot open shared object file`, run `sudo apt install libcublas12`. This is a known gap between the CUDA toolkit and the Ubuntu 24.04 package split.
+
+Windows Docker Desktop testing always runs on CPU — slower but functional for development.
+
+---
+
+## Built With
+
+| Layer | Technology |
+|---|---|
+| Telephony | [Asterisk 20](https://www.asterisk.org/) + PJSIP + ARI WebSocket |
+| Call control | Python asyncio + `aiohttp` ARI client |
+| Speech-to-text | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (multilingual, GPU) |
+| Voice activity | [Silero VAD](https://github.com/snakers4/silero-vad) |
+| LLM | [Ollama](https://ollama.com/) — `llama3.1:8b` (local, no cloud) |
+| Text-to-speech | [Kokoro TTS](https://github.com/hexgrad/kokoro) — 82M parameter neural voices (EN/ES/FR/IT) + espeak-ng for DE/RO/HE |
+| Scheduling | Google Calendar API (OAuth2) |
+| Database | SQLite + SQLAlchemy async |
+| API | FastAPI |
+| Dashboard | React + Tailwind + shadcn/ui + Express |
+
+---
+
+## Roadmap
+
+### Shipped
+
+| Version | What shipped |
+|---|---|
+| **v1.0** | Asterisk PBX + ARI WebSocket, Whisper STT + Silero VAD, Ollama intent detection, Kokoro TTS, Google Calendar scheduling, SQLite call log + routing rules, React dashboard, Docker (Linux GPU + Windows CPU) |
+| **v1.1** | Bilingual EN/ES — auto language detection + greeting replay; live translation relay during transfers (both parties hear own language) |
+| **v1.2** | Business hours gate + timezone-aware scheduling; holiday management (DB + `.env` + dashboard CRUD); four after-hours modes; retry logic with localized silence prompts; DTMF keypress menu; VIP caller routing; structured call-path logging; optional voicemail + Whisper transcription; optional LLM post-call summary; optional FAQ/knowledge-base injection; dashboard overhaul (stats, routing, holidays, voicemails, config, health) |
+| **v1.3** | Interactive onboarding wizard for Linux/macOS (`onboard.sh`) and Windows (`onboard-windows.ps1`) — auto-writes `.env`, `ari.conf`, `pjsip.conf` |
+| **v1.4** | 7-language support: EN, ES, FR, IT, DE, RO, HE — multilingual TTS voices (Kokoro for EN/ES/FR/IT, espeak-ng for DE/RO/HE); all prompts and messages localized |
+| **v1.6** | Kokoro TTS replaces Piper TTS (82M parameter neural model); `onboard.sh` becomes full system installer; automatic Ollama detection |
+| **v1.6.1–v1.6.9** | Production hardening: all services bind to 127.0.0.1; systemd units; nginx reverse proxy; logrotate; SQLite backup script; CORS hardening; RTP port overlap fix; `chan_sip` disabled; Docker dashboard loopback-only; various `onboard.sh` and config fixes |
+| **v1.7.0–v1.7.5** | Silero VAD `trust_repo=True` crash fix; Kokoro voices exposed in `/api/config`; `.env` migration script; `update-live-install.sh` safe upgrade script; `StasisEnd` bridge-transition fix; `asyncio.sleep(0)` handler start fix; backgrounded initial DB insert; `ChannelHangupRequest` silent-call root cause fix |
+| **v1.8.0** | ExternalMedia codec switched to PCMU/ulaw with PCM16↔ulaw transcode helpers; RTP streamed at real-time 20 ms pacing; `UnicastRTP` StasisStart events ignored; Whisper/Kokoro/Silero VAD all prewarmed at startup; WAN IP auto-detection in `onboard.sh`; dashboard voicemail inbox + 7-day sparkline + sidebar health footer; `/api/stats/daily` endpoint; Agents page added to dashboard |
+
+### Planned
+
 - [ ] **Barge-in** — interrupt AI mid-sentence when caller starts speaking
 - [ ] **SIP trunk integration** — Twilio, VoIP.ms, or any ITSP for real inbound DID numbers
-- [ ] **SMS callback confirmation** — text the caller a confirmation after scheduling (Twilio)
-- [ ] **Faster translation** — swap Ollama translation path for Helsinki-NLP opus-mt (~100ms vs ~2s)
-- [ ] **Wake-word detection** — skip VAD warmup on fast responses
+- [ ] **SMS callback confirmation** — text the caller a confirmation after scheduling
+- [ ] **Faster translation** — swap Ollama translation for Helsinki-NLP opus-mt (~100 ms vs ~2 s)
 - [ ] **PostgreSQL support** — drop-in swap from SQLite for production-scale deployments
-- [ ] **GitHub Releases** — formal release pages with changelogs for v1.2 / v1.3 / v1.4
 - [ ] **Additional languages** — Portuguese (PT), Polish (PL), Arabic (AR) when Kokoro adds support
 - [ ] **Web-based onboarding** — browser UI equivalent of the onboarding wizard
+- [ ] **GitHub Releases** — formal release pages with changelogs for each milestone
