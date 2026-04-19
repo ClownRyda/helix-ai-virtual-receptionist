@@ -41,6 +41,22 @@ KOKORO_VOICE = {
     "it": "if_sara",     # Italian female
 }
 
+# Slightly slower English pacing sounds less synthetic on phone audio.
+KOKORO_SPEED = {
+    "en": 0.92,
+    "es": 0.98,
+    "fr": 0.98,
+    "it": 0.98,
+}
+
+# Brief pauses between Kokoro chunks avoid the hard stitched-together sound.
+KOKORO_CHUNK_PAUSE_MS = {
+    "en": 120,
+    "es": 80,
+    "fr": 80,
+    "it": 80,
+}
+
 # espeak-ng voice tags for languages without Kokoro support
 ESPEAK_VOICES = {
     "de": "de",    # German
@@ -106,7 +122,8 @@ def synthesize_pcm(text: str, language: str = "en") -> bytes:
 
     try:
         audio_chunks = []
-        generator = pipeline(text, voice=voice, speed=1.0, split_pattern=r"[.!?]+")
+        speed = KOKORO_SPEED.get(language, 1.0)
+        generator = pipeline(text, voice=voice, speed=speed, split_pattern=r"[.!?;:]+")
         for _gs, _ps, audio in generator:
             if audio is not None and len(audio) > 0:
                 audio_chunks.append(audio)
@@ -115,8 +132,19 @@ def synthesize_pcm(text: str, language: str = "en") -> bytes:
             log.warning("Kokoro produced no audio", language=language)
             return _fallback_silence(seconds=1)
 
-        # Concatenate all chunks into one float32 array
-        combined = np.concatenate(audio_chunks).astype(np.float32)
+        # Add a small pause between chunks so speech sounds less abrupt.
+        pause_ms = KOKORO_CHUNK_PAUSE_MS.get(language, 0)
+        if pause_ms and len(audio_chunks) > 1:
+            pause_samples = int(KOKORO_SAMPLE_RATE * (pause_ms / 1000.0))
+            pause = np.zeros(pause_samples, dtype=np.float32)
+            stitched = []
+            for i, chunk in enumerate(audio_chunks):
+                stitched.append(chunk)
+                if i < len(audio_chunks) - 1:
+                    stitched.append(pause)
+            combined = np.concatenate(stitched).astype(np.float32)
+        else:
+            combined = np.concatenate(audio_chunks).astype(np.float32)
 
         # Resample from 24000 Hz to 16000 Hz
         resampled = _resample_float32(combined, KOKORO_SAMPLE_RATE, ASTERISK_SAMPLE_RATE)

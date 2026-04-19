@@ -135,6 +135,16 @@ class ConversationState:
         # Retry tracking
         self.retry_count: int = 0      # consecutive no-speech / unknown-intent events
         self.unknown_count: int = 0    # consecutive unknown-intent turns
+        # Secret game mode
+        self.secret_game_mode: bool = False
+        self.secret_game_history: list[dict] = []
+        self.secret_game_questions_asked: int = 0
+        self.secret_game_last_guess: str | None = None
+        self.secret_game_summary: str = ""
+        self.secret_game_asked_prompts: set[str] = set()
+        self.secret_game_profile: dict = {}
+        self.secret_game_wrong_guesses: int = 0
+        self.secret_game_rule_steps_done: set[str] = set()
 
     def add_turn(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})

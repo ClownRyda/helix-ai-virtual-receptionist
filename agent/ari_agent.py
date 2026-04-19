@@ -24,6 +24,7 @@ v1.2 additions:
 import asyncio
 import audioop
 import json
+import random
 import socket
 import struct
 import time
@@ -36,7 +37,7 @@ from config import settings
 from stt.whisper_engine import transcribe_pcm
 from tts.kokoro_engine import synthesize_pcm
 from llm.intent_engine import (
-    detect_intent, generate_response, generate_call_summary, ConversationState
+    detect_intent, generate_response, generate_call_summary, ConversationState, _ollama_chat
 )
 from llm.translate_engine import ensure_english
 from gcal.gcal import get_available_slots, book_appointment, slots_to_speech, parse_slot_choice
@@ -45,6 +46,27 @@ from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage
 from vad import SileroVADEngine
 
 log = structlog.get_logger(__name__)
+
+SECRET_GAME_TRIGGER_PHRASES = {
+    "super secret game mode",
+}
+
+LANGUAGE_NAMES = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "de": "German",
+    "ro": "Romanian",
+    "he": "Hebrew",
+}
+
+RANDOM_ROMANIAN_GREETING_LINES = [
+    "Apropo, vorbesc si romana, asa ca putem continua si in romana daca vrei.",
+    "Si, doar asa, din senin: salut din partea sistemului in romana.",
+    "Mic bonus in romana: daca vrei, poti sa imi vorbesti si romaneste.",
+    "O mica surpriza in romana: sunt gata sa te ajut si in aceasta limba.",
+]
 
 # Internal audio is PCM16 @ 16k for VAD/STT/TTS.
 RTP_HEADER_SIZE = 12
@@ -66,12 +88,16 @@ RTP_BYTES_PER_FRAME = RTP_SAMPLES_PER_FRAME                 # 160 bytes (uLaw)
 
 def _is_business_hours() -> bool:
     """
-    Return True if the current local time is within business hours on a weekday.
+    Return True if the current local time is within business hours.
     Timezone is determined by BUSINESS_TIMEZONE.
     Does NOT check holidays — use _is_holiday() for that.
+
+    Special case for live testing: 0-24 means always open, including weekends.
     """
     tz = ZoneInfo(settings.business_timezone)
     now = datetime.now(tz)
+    if settings.business_hours_start == 0 and settings.business_hours_end >= 24:
+        return True
     if now.weekday() >= 5:       # Saturday=5, Sunday=6
         return False
     hour = now.hour
@@ -145,6 +171,149 @@ def _parse_dtmf_map() -> dict[str, str]:
     except Exception:
         log.warning("Invalid DTMF_MAP — using default", dtmf_map=settings.dtmf_map)
         return {"0": settings.operator_extension}
+
+
+def _is_secret_game_trigger(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(phrase in lowered for phrase in SECRET_GAME_TRIGGER_PHRASES)
+
+
+def _language_confirmation(lang: str) -> str:
+    language_name = LANGUAGE_NAMES.get(lang, "English")
+    return (
+        f"I understood you in {language_name}, "
+        f"I will proceed in {language_name} until you speak another language."
+    )
+
+
+def _normalize_game_prompt(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())
+
+
+SECRET_GAME_RULE_PROMPTS = {
+    "living": "Is it a living thing?",
+    "person": "Is it a person?",
+    "animal": "Is it an animal?",
+    "plant": "Is it a plant?",
+    "fictional": "Is it fictional?",
+    "portable": "Could you hold it in one hand?",
+    "indoors": "Would you usually find it indoors?",
+    "outdoors": "Would you usually find it outdoors?",
+    "material": "Is it mostly made of metal?",
+    "size": "Is it bigger than a microwave?",
+    "purpose": "Is it mainly used for work or utility?",
+}
+
+SECRET_GAME_FALLBACK_QUESTIONS = [
+    "Would you usually see it at home?",
+    "Is it something people use every day?",
+    "Is it more common indoors than outdoors?",
+    "Would most people recognize it instantly?",
+    "Is it mainly man-made?",
+    "Would you usually buy it in a store?",
+    "Is it used more for fun than for work?",
+    "Is it usually smaller than a backpack?",
+]
+
+
+def _secret_game_mark_rule_step(state: ConversationState, prompt_text: str) -> None:
+    normalized = _normalize_game_prompt(prompt_text)
+    for rule_key, rule_prompt in SECRET_GAME_RULE_PROMPTS.items():
+        if normalized == _normalize_game_prompt(rule_prompt):
+            state.secret_game_rule_steps_done.add(rule_key)
+            return
+
+
+def _secret_game_fallback_prompt(state: ConversationState) -> tuple[str, str]:
+    for prompt in SECRET_GAME_FALLBACK_QUESTIONS:
+        normalized = _normalize_game_prompt(prompt)
+        if normalized not in state.secret_game_asked_prompts:
+            return "question", prompt
+    return "guess", "Is it a phone?"
+
+
+def _secret_game_agitation_line(state: ConversationState) -> str:
+    pressure = state.secret_game_questions_asked + (state.secret_game_wrong_guesses * 2)
+    if pressure >= 18:
+        return "I am running out of questions here. Be honest with me. Are you cheating?"
+    if pressure >= 14:
+        return "This is getting suspicious. I should know this by now."
+    if pressure >= 10:
+        return "All right, this is getting annoyingly tricky."
+    return ""
+
+
+def _profile_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"yes", "true", "y", "likely"}:
+            return True
+        if lowered in {"no", "false", "n", "unlikely"}:
+            return False
+    return None
+
+
+def _profile_number(value) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _profile_candidates(profile: dict) -> list[str]:
+    value = profile.get("likely_candidates") or []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return []
+
+
+def _secret_game_rule_based_prompt(state: ConversationState) -> tuple[str, str] | None:
+    profile = state.secret_game_profile or {}
+    confidence = _profile_number(profile.get("confidence")) or 0.0
+    candidates = _profile_candidates(profile)
+    living = _profile_bool(profile.get("living"))
+    person = _profile_bool(profile.get("person"))
+    animal = _profile_bool(profile.get("animal"))
+    plant = _profile_bool(profile.get("plant"))
+    fictional = _profile_bool(profile.get("fictional"))
+    portable = _profile_bool(profile.get("portable"))
+    indoors = _profile_bool(profile.get("indoors"))
+    outdoors = _profile_bool(profile.get("outdoors"))
+
+    if candidates and (confidence >= 0.72 or len(candidates) <= 2 or state.secret_game_questions_asked >= 12):
+        guess = candidates[0]
+        return "guess", f"Is it {guess}?"
+
+    rules = [
+        ("living", living is None, SECRET_GAME_RULE_PROMPTS["living"]),
+        ("person", living is True and person is None, SECRET_GAME_RULE_PROMPTS["person"]),
+        ("animal", living is True and person is False and animal is None, SECRET_GAME_RULE_PROMPTS["animal"]),
+        ("plant", living is True and animal is False and plant is None, SECRET_GAME_RULE_PROMPTS["plant"]),
+        ("fictional", living is False and fictional is None, SECRET_GAME_RULE_PROMPTS["fictional"]),
+        ("portable", portable is None, SECRET_GAME_RULE_PROMPTS["portable"]),
+        ("indoors", indoors is None, SECRET_GAME_RULE_PROMPTS["indoors"]),
+        ("outdoors", outdoors is None and living is True, SECRET_GAME_RULE_PROMPTS["outdoors"]),
+        ("material", living is False and profile.get("material") in (None, "", "unknown"), SECRET_GAME_RULE_PROMPTS["material"]),
+        ("size", profile.get("size") in (None, "", "unknown"), SECRET_GAME_RULE_PROMPTS["size"]),
+        ("purpose", living is False and profile.get("purpose") in (None, "", "unknown"), SECRET_GAME_RULE_PROMPTS["purpose"]),
+    ]
+    for rule_key, condition, prompt in rules:
+        if (
+            condition
+            and rule_key not in state.secret_game_rule_steps_done
+            and _normalize_game_prompt(prompt) not in state.secret_game_asked_prompts
+        ):
+            return "question", prompt
+
+    if candidates:
+        guess = candidates[0]
+        return "guess", f"Is it {guess}?"
+
+    return None
 
 
 # ── Call-path logger ──────────────────────────────────────────────────────────
@@ -706,6 +875,7 @@ class CallHandler:
         self.call_path.record("greeted", lang="en", after_hours=after_hours)
 
         # Listen for the first response
+        log.info("Listening for first caller response", call_id=self.call_id)
         listen_result = await self._listen()
 
         if not listen_result:
@@ -771,51 +941,237 @@ class CallHandler:
                 ),
             }
         else:
+            romanian_tag = random.choice(RANDOM_ROMANIAN_GREETING_LINES)
             greetings = {
                 "en": (
-                    f"Thank you for calling {name}, we are excited to speak with you. "
+                    f"Thank you for calling {name}. "
                     f"This is {agent}, your virtual assistant. "
-                    f"There are no buttons to press — just speak to me naturally and I will take care of you. "
-                    f"How can I help you today?"
+                    f"How can I help you today? "
+                    f"I am the fucking voice that all the AI videos use and NOW Im in your fucking phone system, way to go fuck face. "
+                    f"{romanian_tag}"
                 ),
                 "es": (
-                    f"Gracias por llamar a {name}, estamos muy contentos de hablar con usted. "
+                    f"Gracias por llamar a {name}. "
                     f"Le habla {agent}, su asistente virtual. "
-                    f"No hay botones que presionar — hábleme con naturalidad y yo me encargaré de usted. "
                     f"¿En qué le puedo ayudar hoy?"
                 ),
                 "fr": (
-                    f"Merci d'avoir appelé {name}, nous sommes ravis de vous parler. "
+                    f"Merci d'avoir appelé {name}. "
                     f"Je suis {agent}, votre assistant virtuel. "
-                    f"Il n'y a pas de touches à appuyer — parlez-moi simplement et je m'occuperai de vous. "
                     f"Comment puis-je vous aider aujourd'hui ?"
                 ),
                 "it": (
-                    f"Grazie per aver chiamato {name}, siamo lieti di parlare con lei. "
+                    f"Grazie per aver chiamato {name}. "
                     f"Sono {agent}, il suo assistente virtuale. "
-                    f"Non ci sono tasti da premere — mi parli liberamente e mi occuperò di lei. "
                     f"Come posso aiutarla oggi?"
                 ),
                 "de": (
-                    f"Vielen Dank für Ihren Anruf bei {name}, wir freuen uns, mit Ihnen zu sprechen. "
+                    f"Vielen Dank für Ihren Anruf bei {name}. "
                     f"Hier ist {agent}, Ihr virtueller Assistent. "
-                    f"Es gibt keine Tasten zu drücken — sprechen Sie einfach natürlich mit mir. "
                     f"Wie kann ich Ihnen heute helfen?"
                 ),
                 "ro": (
-                    f"Vă mulțumim că ați sunat la {name}, suntem încântați să vă vorbim. "
+                    f"Vă mulțumim că ați sunat la {name}. "
                     f"Sunt {agent}, asistentul dvs. virtual. "
-                    f"Nu există taste de apăsat — vorbiți-mi natural și mă voi ocupa de dvs. "
                     f"Cu ce vă pot ajuta astăzi?"
                 ),
                 "he": (
-                    f"תודה שהתקשרת ל-{name}, אנחנו שמחים לדבר איתך. "
+                    f"תודה שהתקשרת ל-{name}. "
                     f"אני {agent}, העוזר הווירטואלי שלך. "
-                    f"אין צורך ללחוץ על מקשים — פשוט דבר איתי בטבעיות ואני אדאג לך. "
                     f"איך אני יכול לעזור לך היום?"
                 ),
             }
         return greetings.get(lang, greetings["en"])
+
+    async def _secret_game_next_prompt(self, lang: str) -> tuple[str, str]:
+        rule_based = _secret_game_rule_based_prompt(self.state)
+        if rule_based:
+            return rule_based
+
+        history_lines = []
+        for item in self.state.secret_game_history:
+            history_lines.append(f"{item['role']}: {item['text']}")
+        history_text = "\n".join(history_lines) or "No questions asked yet."
+        asked_prompts = sorted(self.state.secret_game_asked_prompts)
+        asked_text = "\n".join(f"- {item}" for item in asked_prompts) or "- none"
+        summary_text = self.state.secret_game_summary or "No summary yet."
+        profile_text = json.dumps(self.state.secret_game_profile or {}, ensure_ascii=False)
+
+        system = (
+            "You are playing 20 Questions as the guesser over a phone call. "
+            "The caller is thinking of something and answers yes/no/maybe/unknown. "
+            "Return JSON only with keys type and text. "
+            "type must be either question or guess. "
+            "Ask exactly one short, concrete yes/no question unless you have a strong guess. "
+            "Start broad and narrow down logically: living thing, person/animal/object/place/fictional, size, use, habitat, era, etc. "
+            "Do not repeat or paraphrase a question that was already asked. "
+            "Use the running summary, structured profile, and previous answers to refine your next step. "
+            "When the profile strongly suggests a candidate, make a specific guess instead of asking another weak question. "
+            "Near the end, you may sound increasingly agitated and suspicious, but stay playful and keep the prompt short. "
+            "If you have a strong guess, make type=guess and text like 'Is it a tiger?'. "
+            "Keep text under 16 words. Do not explain your reasoning."
+        )
+        agitation_line = _secret_game_agitation_line(self.state)
+        user = (
+            f"Language: {LANGUAGE_NAMES.get(lang, 'English')}\n"
+            f"Questions asked so far: {self.state.secret_game_questions_asked}\n"
+            f"Wrong guesses so far: {self.state.secret_game_wrong_guesses}\n"
+            f"Tone guidance: {agitation_line or 'neutral but playful'}\n"
+            f"Running summary:\n{summary_text}\n\n"
+            f"Structured profile:\n{profile_text}\n\n"
+            f"Already asked prompts:\n{asked_text}\n\n"
+            f"History:\n{history_text}"
+        )
+        try:
+            raw = await _ollama_chat(
+                model=settings.ollama_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                format="json",
+            )
+            payload = json.loads(raw)
+            prompt_type = payload.get("type", "question")
+            prompt_text = payload.get("text", "").strip()
+            if prompt_type not in {"question", "guess"} or not prompt_text:
+                raise ValueError("invalid game payload")
+            normalized = _normalize_game_prompt(prompt_text)
+            if normalized in self.state.secret_game_asked_prompts:
+                raise ValueError("repeated game prompt")
+            return prompt_type, prompt_text
+        except Exception as e:
+            log.warning("Secret game prompt generation failed", error=str(e))
+            return _secret_game_fallback_prompt(self.state)
+
+    async def _secret_game_update_summary(self, lang: str):
+        history_lines = []
+        for item in self.state.secret_game_history[-8:]:
+            history_lines.append(f"{item['role']}: {item['text']}")
+        history_text = "\n".join(history_lines) or "No history."
+        system = (
+            "Summarize a 20 Questions guessing game state in one short paragraph. "
+            "State what categories seem excluded, what categories remain plausible, "
+            "and what the next best narrowing direction is. Plain text only."
+        )
+        user = (
+            f"Language: {LANGUAGE_NAMES.get(lang, 'English')}\n"
+            f"Game history:\n{history_text}"
+        )
+        try:
+            summary = await _ollama_chat(
+                model=settings.ollama_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            self.state.secret_game_summary = summary.strip()
+        except Exception as e:
+            log.warning("Secret game summary update failed", error=str(e))
+
+    async def _secret_game_update_profile(self, lang: str):
+        history_lines = []
+        for item in self.state.secret_game_history[-12:]:
+            history_lines.append(f"{item['role']}: {item['text']}")
+        history_text = "\n".join(history_lines) or "No history."
+        system = (
+            "Extract a structured 20 Questions profile from the conversation. "
+            "Return JSON only with these keys: "
+            "category, likely_candidates, eliminated_categories, size, portable, living, person, animal, plant, fictional, "
+            "indoors, outdoors, material, purpose, location, confidence, notes. "
+            "Use null when unknown. likely_candidates and eliminated_categories must be arrays. "
+            "confidence is a number from 0 to 1. Keep notes short."
+        )
+        user = (
+            f"Language: {LANGUAGE_NAMES.get(lang, 'English')}\n"
+            f"Current profile: {json.dumps(self.state.secret_game_profile or {}, ensure_ascii=False)}\n"
+            f"Game history:\n{history_text}"
+        )
+        try:
+            raw = await _ollama_chat(
+                model=settings.ollama_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                format="json",
+            )
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                self.state.secret_game_profile = payload
+        except Exception as e:
+            log.warning("Secret game profile update failed", error=str(e))
+
+    async def _enter_secret_game_mode(self, lang: str):
+        self.state.secret_game_mode = True
+        self.state.secret_game_history = []
+        self.state.secret_game_questions_asked = 0
+        self.state.secret_game_last_guess = None
+        self.state.secret_game_summary = ""
+        self.state.secret_game_asked_prompts = set()
+        self.state.secret_game_profile = {}
+        self.state.secret_game_wrong_guesses = 0
+        self.state.secret_game_rule_steps_done = set()
+        self.call_path.record("secret_game_mode_enabled", lang=lang)
+        await self._speak(_language_confirmation(lang), language=lang)
+        intro = (
+            "Super secret game mode activated. Think of something. "
+            "Answer only yes, no, maybe, or unknown."
+        )
+        await self._speak(intro, language=lang)
+        prompt_type, prompt_text = await self._secret_game_next_prompt(lang)
+        if prompt_type == "guess":
+            self.state.secret_game_last_guess = prompt_text
+        else:
+            self.state.secret_game_last_guess = None
+            self.state.secret_game_questions_asked += 1
+            _secret_game_mark_rule_step(self.state, prompt_text)
+        self.state.secret_game_asked_prompts.add(_normalize_game_prompt(prompt_text))
+        self.state.secret_game_history.append({"role": "assistant", "text": prompt_text})
+        await self._speak(prompt_text, language=lang)
+
+    async def _handle_secret_game_turn(self, utterance: str, lang: str) -> bool:
+        lowered = utterance.lower()
+        self.state.secret_game_history.append({"role": "user", "text": utterance})
+
+        if any(word in lowered for word in ["stop game", "exit game", "quit game", "end game"]):
+            self.state.secret_game_mode = False
+            self.state.secret_game_last_guess = None
+            await self._speak("Exiting super secret game mode. How can I help you today?", language=lang)
+            return True
+
+        if self.state.secret_game_last_guess:
+            if any(word in lowered for word in ["yes", "yeah", "yep", "correct", "right"]):
+                self.state.secret_game_mode = False
+                self.state.secret_game_last_guess = None
+                await self._speak("Nice. I guessed it. We can play again any time.", language=lang)
+                return True
+            if any(word in lowered for word in ["no", "nope", "wrong", "incorrect"]):
+                self.state.secret_game_last_guess = None
+                self.state.secret_game_wrong_guesses += 1
+
+        if self.state.secret_game_questions_asked >= 20:
+            self.state.secret_game_mode = False
+            await self._speak("I am out of questions. You win. We can play again any time.", language=lang)
+            return True
+
+        await self._secret_game_update_summary(lang)
+        await self._secret_game_update_profile(lang)
+        prompt_type, prompt_text = await self._secret_game_next_prompt(lang)
+        agitation_line = _secret_game_agitation_line(self.state)
+        if prompt_type == "guess":
+            self.state.secret_game_last_guess = prompt_text
+        else:
+            self.state.secret_game_last_guess = None
+            self.state.secret_game_questions_asked += 1
+            _secret_game_mark_rule_step(self.state, prompt_text)
+        self.state.secret_game_asked_prompts.add(_normalize_game_prompt(prompt_text))
+        self.state.secret_game_history.append({"role": "assistant", "text": prompt_text})
+        if agitation_line:
+            await self._speak(agitation_line, language=lang)
+        await self._speak(prompt_text, language=lang)
+        return True
 
     # ── Conversation loop ─────────────────────────────────────────────────────
 
@@ -839,6 +1195,7 @@ class CallHandler:
                         await self._handle_dtmf(digit)
                         return
 
+                log.info("Listening for caller turn", call_id=self.call_id, turn=self.state.turn_count)
                 listen_result = await self._listen()
 
             # ── No speech handling ────────────────────────────────────
@@ -889,6 +1246,15 @@ class CallHandler:
 
             self.transcript_log.append(f"Caller [{detected_lang}]: {utterance}")
             self.call_path.record("utterance", turn=self.state.turn_count, lang=detected_lang, text=utterance[:60])
+
+            if _is_secret_game_trigger(utterance):
+                await self._enter_secret_game_mode(lang)
+                continue
+
+            if self.state.secret_game_mode:
+                handled = await self._handle_secret_game_turn(utterance, lang)
+                if handled:
+                    continue
 
             # ── Intent detection ──────────────────────────────────────
             if not self.state.intent or self.state.intent == "unknown":
