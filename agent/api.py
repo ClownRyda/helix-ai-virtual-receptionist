@@ -231,17 +231,23 @@ async def get_call(call_id: str, db: AsyncSession = Depends(get_db)):
 
 @app.get("/api/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(CallLog))
-    calls = result.scalars().all()
-    total = len(calls)
-    transferred = sum(1 for c in calls if c.disposition == "transferred")
-    scheduled = sum(1 for c in calls if c.disposition == "scheduled")
-    after_hours = sum(1 for c in calls if c.disposition == "after_hours")
-    voicemail = sum(1 for c in calls if c.disposition == "voicemail")
-    avg_duration = (
-        sum(c.duration_seconds for c in calls if c.duration_seconds) / total
-        if total > 0 else 0
-    )
+    """Return aggregate call stats using SQL COUNT/SUM — O(1) regardless of table size."""
+    from sqlalchemy import func, case
+    stmt = select(
+        func.count().label("total"),
+        func.sum(case((CallLog.disposition == "transferred", 1), else_=0)).label("transferred"),
+        func.sum(case((CallLog.disposition == "scheduled",   1), else_=0)).label("scheduled"),
+        func.sum(case((CallLog.disposition == "after_hours", 1), else_=0)).label("after_hours"),
+        func.sum(case((CallLog.disposition == "voicemail",   1), else_=0)).label("voicemail"),
+        func.avg(CallLog.duration_seconds).label("avg_duration"),
+    ).select_from(CallLog)
+    row = (await db.execute(stmt)).one()
+    total        = row.total        or 0
+    transferred  = row.transferred  or 0
+    scheduled    = row.scheduled    or 0
+    after_hours  = row.after_hours  or 0
+    voicemail    = row.voicemail    or 0
+    avg_duration = float(row.avg_duration or 0)
     return {
         "total_calls": total,
         "transferred": transferred,
@@ -258,24 +264,31 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 
 @app.get("/api/stats/daily")
 async def get_daily_stats(db: AsyncSession = Depends(get_db)):
-    """Returns call counts per day for the last 7 days (UTC dates)."""
+    """
+    Returns call counts per day for the last 7 days (UTC dates).
+    Uses a single SQL GROUP BY query — no Python-side row scan.
+    SQLite stores datetimes as ISO strings; strftime('%Y-%m-%d', ...) works on both
+    ISO string columns and native datetime columns.
+    """
     from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func, text
     today = datetime.now(timezone.utc).date()
-    days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]
-    result = await db.execute(select(CallLog))
-    calls = result.scalars().all()
-    counts = {d.isoformat(): 0 for d in days}
-    for call in calls:
-        if call.started_at:
-            d = call.started_at.date() if hasattr(call.started_at, "date") else None
-            if d is None:
-                try:
-                    d = datetime.fromisoformat(str(call.started_at)).date()
-                except Exception:
-                    continue
-            key = d.isoformat()
-            if key in counts:
-                counts[key] += 1
+    cutoff = (today - timedelta(days=6)).isoformat()
+    # Build the 7-day scaffold so days with 0 calls still appear
+    days = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    stmt = (
+        select(
+            func.strftime("%Y-%m-%d", CallLog.started_at).label("day"),
+            func.count().label("calls"),
+        )
+        .where(CallLog.started_at >= cutoff)
+        .group_by(func.strftime("%Y-%m-%d", CallLog.started_at))
+    )
+    rows = (await db.execute(stmt)).all()
+    counts = {d: 0 for d in days}
+    for row in rows:
+        if row.day in counts:
+            counts[row.day] = row.calls
     return [{"date": k, "calls": v} for k, v in counts.items()]
 
 # ── Routing rules ─────────────────────────────────────────────────────────────
