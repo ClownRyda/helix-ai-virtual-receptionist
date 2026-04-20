@@ -13,7 +13,7 @@ Built for operators who care about control, privacy, and reliability, Helix runs
 
 **Deployment target:** bare-metal Ubuntu production, with Docker/Desktop support for testing and development  
 **Runtime profile:** fully local voice AI, live agent routing, multilingual translation bridging, Google Calendar scheduling  
-**Operating model:** your hardware, your SIP stack, your data
+**Operating model:** your hardware, your SIP stack, your data, your PBX behavior
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](../../issues/new?template=bug_report.md)
 
@@ -104,6 +104,15 @@ Caller ──SIP/RTP──▶ Asterisk PBX (PJSIP + ARI)
 - Hard-override holiday list in `.env` (`HOLIDAY_DATES=2026-12-25,2027-01-01`)
 - Four after-hours modes: **callback**, **voicemail**, **schedule**, **emergency**
 
+### Core PBX behavior
+- Direct extension-to-extension dialing for internal users (`1001`, `1002`, `1003`)
+- No-answer fallback to **Mini-Voicemail** for direct extension calls
+- Built-in **Music on Hold** classes:
+  - `default` = 90s R&B stream
+  - `ai-news` = optional AI/talk stream
+  - `local-fallback` = bundled local audio loop
+- Dedicated MOH test extension: dial `*59` from any registered internal endpoint
+
 ### 7-language support
 - Greeting plays in English; Whisper detects language from the caller's first response
 - Non-English detected (ES, FR, IT, DE, RO, HE) → greeting replays in that language; full conversation continues in the caller's language
@@ -179,6 +188,7 @@ Helix includes a first-pass live human agent layer on top of the caller-side AI 
 | `*56` | Set state to break | |
 | `*57` | Set state to available | |
 | `*58` | Set state to offline | |
+| `*59` | Test default Music on Hold | Answers immediately and plays the current default MOH class |
 
 ### Agent Routing Flow
 
@@ -421,6 +431,14 @@ cp agent/.env.example agent/.env
 | `FAQ_ENABLED` | `false` | Inject FAQ entries into LLM context |
 | `FAQ_FILE` | `faq.txt` | Path to plain-text FAQ file (one entry per line) |
 
+#### PBX media / voicemail templates
+| File | Purpose |
+|---|---|
+| `asterisk/etc/asterisk/extensions.conf` | Internal dialing, Mini-Voicemail fallback, feature codes, MOH test extension |
+| `asterisk/etc/asterisk/minivm.conf` | Mailbox definitions for direct-extension voicemail |
+| `asterisk/etc/asterisk/musiconhold.conf` | MOH class definitions (`default`, `ai-news`, `local-fallback`) |
+| `asterisk/moh/default/*` | Bundled local fallback hold audio copied into `/var/lib/asterisk/moh/` during onboarding |
+
 ---
 
 ## API Endpoints
@@ -445,11 +463,6 @@ cp agent/.env.example agent/.env
 | `GET` | `/api/voicemails` | List voicemail messages |
 | `GET` | `/api/voicemails/{id}` | Voicemail detail + transcript |
 | `PATCH` | `/api/voicemails/{id}` | Update voicemail status (unread/read/archived) |
-| `GET` | `/api/health` | Health check + version + feature flags + TTS engine |
-| `GET` | `/api/agents` | List all registered agents with state, language, queues |
-| `POST` | `/api/agents/register` | Register a new agent |
-| `PATCH` | `/api/agents/{agent_id}` | Update agent fields (language, queues, state) |
-| `DELETE` | `/api/agents/{agent_id}` | Remove an agent (409 if on active call) |
 | `GET` | `/api/health` | Health check + version + feature flags + TTS engine |
 | `GET` | `/api/agents` | List all registered agents with state, language, queues |
 | `POST` | `/api/agents/register` | Register a new agent |
@@ -666,11 +679,11 @@ helix-ai-virtual-receptionist/
 │   ├── ari_agent.py             Core call handler, business hours gate, retries,
 │   │                            DTMF, VIP routing, CallPath logger, voicemail,
 │   │                            TranslationRelay
-│   ├── agents.py                Agent roster — extensions, languages, assignments
-│   ├── api.py                   REST API — calls, routing, holidays, config, voicemails
+│   ├── api.py                   REST API — calls, routing, holidays, config, voicemails,
+│   │                            agents, campaigns, outbound test call
 │   ├── config.py                All settings (Pydantic + .env)
 │   ├── database.py              SQLAlchemy models: CallLog, Appointment, RoutingRule,
-│   │                            Holiday, VoicemailMessage
+│   │                            Holiday, VoicemailMessage, AgentProfile, Campaign
 │   ├── .env.example             Fully documented template — copy to .env and edit
 │   ├── stt/
 │   │   └── whisper_engine.py    faster-whisper STT, returns text + detected language
@@ -684,17 +697,23 @@ helix-ai-virtual-receptionist/
 │   ├── gcal/
 │   │   └── gcal.py              Google Calendar free/busy + booking
 │   └── routing/
+│       ├── agents.py            Agent selection, atomic claim, state transitions
 │       └── router.py            DB-backed routing + VIP route + after-hours route
 ├── asterisk/
-│   └── etc/asterisk/
-│       ├── pjsip.conf           SIP extensions + NAT config
-│       ├── extensions.conf      Dialplan: 9999 → AI, internal ext-to-ext, [dtmf-menu]
-│       ├── ari.conf             ARI credentials
-│       ├── http.conf            ARI HTTP server
-│       └── rtp.conf             RTP port range (10000–20000)
+│   ├── etc/asterisk/
+│   │   ├── pjsip.conf           SIP extensions + NAT config
+│   │   ├── extensions.conf      Dialplan: 9999 → AI, ext-to-ext, MiniVM fallback,
+│   │   │                        feature codes, MOH test
+│   │   ├── minivm.conf          Mini-Voicemail mailboxes for direct extension fallback
+│   │   ├── musiconhold.conf     MOH classes: default stream + alternate classes + local fallback
+│   │   ├── ari.conf             ARI credentials
+│   │   ├── http.conf            ARI HTTP server
+│   │   └── rtp.conf             RTP port range (10000–20000)
+│   └── moh/
+│       └── default/             Bundled local fallback hold audio installed to /var/lib/asterisk/moh/
 ├── dashboard/
 │   ├── client/src/pages/        React pages (Dashboard, CallLogs, Routing, Appointments,
-│   │                            Voicemails, Agents, Settings)
+│   │                            Voicemails, Agents, Campaigns, OutboundCalls, Settings)
 │   └── server/                  Express API proxy (holidays, voicemails, config PATCH)
 ├── docker/
 │   ├── docker-compose.yml       Linux/Ubuntu (GPU, host networking)
