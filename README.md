@@ -16,10 +16,11 @@ In practical terms, Helix can:
 - translate live conversations when caller and agent do not share a language
 - handle after-hours flows with callback, voicemail, scheduling, or emergency routing
 - book appointments against Google Calendar
-- support normal PBX behavior like direct extension dialing, voicemail fallback, and hold music
-- expose call logs, routing rules, voicemails, holidays, agent state, and outbound scaffolding in a live dashboard
+- look up callers in Vtiger CRM, create or update records, and sync call notes back to the CRM
+- support normal PBX behavior like direct extension dialing, voicemail fallback, hold music, and internal extension calling
+- expose call logs, routing rules, voicemails, holidays, agent state, CRM health, and outbound/campaign scaffolding in a live dashboard and API
 
-Built for operators who care about control, privacy, and reliability, Helix runs on your own infrastructure with Asterisk ARI, Ollama, Whisper, Kokoro TTS, FastAPI, and a live dashboard. No subscriptions. No per-minute API billing. No external speech or LLM provider required.
+Built for operators who care about control, privacy, and reliability, Helix runs on your own infrastructure with Asterisk ARI, Ollama, Whisper, Kokoro TTS, FastAPI, Google Calendar, optional Vtiger CRM integration, and a live operations dashboard. No subscriptions. No per-minute API billing. No external speech or LLM provider required.
 
 **Deployment target:** bare-metal Ubuntu production, with Docker/Desktop support for testing and development  
 **Runtime profile:** fully local voice AI, live agent routing, multilingual translation bridging, Google Calendar scheduling  
@@ -170,6 +171,17 @@ Stored in `CallLog.notes`, returned by `GET /api/calls/{id}`.
 
 ### Scheduling
 Google Calendar free/busy lookup, slot generation, and event booking — all in natural conversation, no keypress menus.
+
+### CRM integration
+- Optional Vtiger CRM lookup and sync path built into the live call flow
+- Caller phone numbers can be normalized and matched against existing CRM records
+- Helix can create/update the caller record, cache the mapping locally, and append post-call notes back to Vtiger
+- REST endpoints expose CRM health and caller lookup behavior for operational checks
+
+### Outbound and campaign foundation
+- Campaign model, lifecycle, dashboard pages, and API endpoints are in place
+- Individual outbound proof-of-life calls can be originated through ARI from the dashboard/API
+- Campaign runner, pacing, retries, and AMD are intentionally deferred; this release ships the data and control layer first
 
 ### Extension routing
 Rules stored in SQLite, editable live via the dashboard. Each rule stores the language of the agent at that extension — relay activates automatically on mismatch.
