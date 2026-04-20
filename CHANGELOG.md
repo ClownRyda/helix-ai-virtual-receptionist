@@ -4,7 +4,54 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.9.0
+## [latest] → v1.9.2
+
+---
+
+## [v1.9.2] — 2026-04-19
+
+### Summary
+Replaces the full-table Python row-scan in `/api/stats` and `/api/stats/daily`
+with SQL aggregate queries. Both endpoints previously loaded every `CallLog` row
+into Python memory and iterated to compute totals. At scale (thousands of calls)
+this caused unnecessary DB load and high memory usage. The new implementation
+uses a single `SELECT COUNT / SUM(CASE...) / AVG` for `/api/stats` and a
+`GROUP BY strftime('%Y-%m-%d', ...)` for `/api/stats/daily` — O(1) memory
+regardless of table size.
+
+### Fixed
+- `agent/api.py` — `/api/stats`: replaced `select(CallLog)` full scan + Python
+  aggregation with a single SQL `COUNT / SUM(CASE) / AVG` query via SQLAlchemy
+  `func`. Memory usage is now constant regardless of call log size.
+- `agent/api.py` — `/api/stats/daily`: replaced full scan + Python date bucketing
+  with `GROUP BY func.strftime('%Y-%m-%d', CallLog.started_at)`. A 7-day date
+  scaffold is built in Python to fill in zero-count days not returned by the DB.
+  Works on both ISO string and native datetime column storage (SQLite compatible).
+
+---
+
+## [v1.9.1] — 2026-04-19
+
+### Summary
+`onboard.sh` now performs a CUDA preflight check when the user selects GPU mode.
+On Ubuntu 24.04, `libcublas.so.12` is not automatically installed by the NVIDIA
+driver or CUDA toolkit meta-packages, which caused faster-whisper to silently
+fall back to CPU inference (3-5s STT latency instead of sub-second). The
+installer now detects this gap, offers to install `libcublas12` automatically,
+and runs a Whisper CUDA smoke-test at the end. If the smoke-test fails, it
+patches `.env` to `WHISPER_DEVICE=cpu` so the service does not crash-loop, and
+prints clear recovery instructions.
+
+### Added
+- `scripts/onboard.sh` — GPU mode now runs `ldconfig -p | grep libcublas.so.12`
+  before proceeding. If missing, prompts the user to install `libcublas12` via
+  `apt-get` and re-checks after install.
+- `scripts/onboard.sh` — Post-install Whisper CUDA smoke-test (native installs
+  only): loads `faster-whisper tiny` on CUDA inside the `helix` venv. If it
+  passes, prints "GPU inference confirmed." If it fails, patches `.env` to
+  `WHISPER_DEVICE=cpu` automatically and warns the user.
+- Addresses the live server issue where the RTX 4090 was running Whisper on CPU
+  because `libcublas12` was not installed on Ubuntu 24.04.
 
 ---
 

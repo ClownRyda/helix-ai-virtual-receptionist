@@ -607,6 +607,36 @@ case "$GPU_CHOICE" in
             warn "nvidia-smi not found. Make sure your NVIDIA drivers are installed."
             warn "For Docker GPU pass-through: apt-get install nvidia-container-toolkit"
         fi
+        # ── libcublas preflight (Ubuntu 24.04 common gap) ────────────────────
+        # Ubuntu 24.04 splits the CUDA toolkit differently from 22.04.
+        # faster-whisper requires libcublas.so.12 at runtime; it ships in the
+        # libcublas12 package which is NOT pulled in automatically by the NVIDIA
+        # driver or cuda-toolkit meta-packages.  If it is absent, Whisper will
+        # silently fall back to CPU — or crash — without a clear error message.
+        if $IS_LINUX; then
+            if ! ldconfig -p 2>/dev/null | grep -q "libcublas.so.12"; then
+                warn "libcublas.so.12 not found — required by faster-whisper for CUDA inference."
+                echo -en "  ${YELLOW}Install libcublas12 now? [Y/n]: ${NC}"
+                read -r CUBLAS_INSTALL
+                CUBLAS_INSTALL="${CUBLAS_INSTALL:-Y}"
+                if [[ "$CUBLAS_INSTALL" =~ ^[Yy]$ ]]; then
+                    info "Installing libcublas12..."
+                    sudo apt-get install -y libcublas12 2>&1 | tail -3
+                    if ldconfig -p 2>/dev/null | grep -q "libcublas.so.12"; then
+                        ok "libcublas12 installed successfully."
+                    else
+                        warn "libcublas12 install may have failed. Check manually with:"
+                        warn "  sudo apt-get install libcublas12"
+                        warn "Continuing with CUDA selected — falling back to CPU at runtime if missing."
+                    fi
+                else
+                    warn "Skipping libcublas12 install. Whisper may fall back to CPU at runtime."
+                    warn "To fix later: sudo apt-get install libcublas12"
+                fi
+            else
+                ok "libcublas.so.12 found — CUDA inference will work."
+            fi
+        fi
         ;;
 esac
 
