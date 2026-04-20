@@ -329,6 +329,11 @@ print('Kokoro models cached.')
     if [[ -d /etc/asterisk ]]; then
         info "Copying Helix Asterisk config files..."
         sudo cp -r "$REPO_ROOT/asterisk/etc/asterisk/"* /etc/asterisk/
+        if [[ -d "$REPO_ROOT/asterisk/moh/default" ]]; then
+            sudo mkdir -p /var/lib/asterisk/moh
+            sudo cp -r "$REPO_ROOT/asterisk/moh/default/"* /var/lib/asterisk/moh/ 2>/dev/null || true
+            log "Default music-on-hold media copied to /var/lib/asterisk/moh/"
+        fi
         # Detect the real Asterisk module path and inject it into asterisk.conf.
         # Ubuntu 24.04 apt package installs to the multiarch path, not the legacy one.
         ASTMODDIR=""
