@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     faq_enabled: bool = Field(False, env="FAQ_ENABLED")
     faq_file: str = Field("faq.txt", env="FAQ_FILE")
 
+    # ── CRM / Vtiger ─────────────────────────────────────────────
+    vtiger_enabled: bool = Field(False, env="VTIGER_ENABLED")
+    vtiger_base_url: str = Field("", env="VTIGER_BASE_URL")
+    vtiger_username: str = Field("", env="VTIGER_USERNAME")
+    vtiger_access_key: str = Field("", env="VTIGER_ACCESS_KEY")
+    vtiger_default_module: str = Field("Contacts", env="VTIGER_DEFAULT_MODULE")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

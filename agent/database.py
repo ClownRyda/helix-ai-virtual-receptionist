@@ -139,6 +139,38 @@ class Campaign(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class CRMRecordLink(Base):
+    __tablename__ = "crm_record_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(64), nullable=True)
+    normalized_phone = Column(String(32), index=True, nullable=False)
+    crm_provider = Column(String(32), default="vtiger", index=True)
+    crm_module = Column(String(32), nullable=False)
+    crm_record_id = Column(String(64), index=True, nullable=False)
+    crm_record_label = Column(String(256), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CRMCallSync(Base):
+    __tablename__ = "crm_call_sync"
+
+    id = Column(Integer, primary_key=True, index=True)
+    call_id = Column(String(64), unique=True, index=True, nullable=False)
+    normalized_phone = Column(String(32), nullable=True)
+    crm_provider = Column(String(32), default="vtiger", index=True)
+    crm_module = Column(String(32), nullable=True)
+    crm_record_id = Column(String(64), nullable=True)
+    lookup_status = Column(String(32), default="pending", nullable=False)
+    sync_status = Column(String(32), default="pending", nullable=False)
+    last_error = Column(Text, nullable=True)
+    synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

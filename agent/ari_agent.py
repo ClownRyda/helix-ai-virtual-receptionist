@@ -35,6 +35,7 @@ import aiohttp
 import structlog
 from dataclasses import dataclass
 from datetime import datetime, date
+from sqlalchemy import select
 from zoneinfo import ZoneInfo
 
 from config import settings
@@ -56,7 +57,8 @@ from routing.agents import (
     release_agent_from_call,
     set_agent_state,
 )
-from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage, AgentProfile
+from database import AsyncSessionLocal, CallLog, Holiday, VoicemailMessage, AgentProfile, CRMRecordLink, CRMCallSync
+from integrations.vtiger import VtigerClient, normalize_phone_number
 from vad import SileroVADEngine
 
 log = structlog.get_logger(__name__)
@@ -1013,6 +1015,12 @@ class CallHandler:
         self.agent_leg_channel_id: str = ""
         self.agent_media_session: AgentMediaSession | None = None
         self.translation_task: asyncio.Task | None = None
+        self.crm_lookup_task: asyncio.Task | None = None
+        self.crm_normalized_phone: str = normalize_phone_number(caller_id)
+        self.crm_provider: str = "vtiger"
+        self.crm_module: str = ""
+        self.crm_record_id: str = ""
+        self.crm_record_label: str = ""
 
     def _get_vad(self) -> SileroVADEngine:
         if self.vad is None:
@@ -1050,6 +1058,7 @@ class CallHandler:
                                 call_id=self.call_id, error=str(_e))
 
             asyncio.create_task(_persist_initial_call_log())
+            self._start_vtiger_lookup()
 
             if self.called_number in {
                 AGENT_FEATURE_LOGIN,
@@ -2580,6 +2589,173 @@ class CallHandler:
             voice = SYSTEM_DEMO_VOICE_CYCLE[index % len(SYSTEM_DEMO_VOICE_CYCLE)]
             await self._speak(segment, language=language, voice_override=voice)
 
+    def _start_vtiger_lookup(self):
+        if not settings.vtiger_enabled or not self.crm_normalized_phone:
+            return
+        self.crm_lookup_task = asyncio.create_task(self._background_vtiger_lookup())
+
+    async def _background_vtiger_lookup(self):
+        now = datetime.utcnow()
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+            call_sync = result.scalars().first()
+            if not call_sync:
+                call_sync = CRMCallSync(
+                    call_id=self.call_id,
+                    normalized_phone=self.crm_normalized_phone,
+                    crm_provider=self.crm_provider,
+                    lookup_status="pending",
+                    sync_status="pending",
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(call_sync)
+                await db.commit()
+
+        client = VtigerClient.from_settings()
+        if not client.configured():
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+                call_sync = result.scalars().first()
+                if call_sync:
+                    call_sync.lookup_status = "disabled"
+                    call_sync.sync_status = "disabled"
+                    call_sync.last_error = "Vtiger not configured"
+                    call_sync.updated_at = datetime.utcnow()
+                    await db.commit()
+            return
+
+        try:
+            record = await client.ensure_caller(self.caller_id, default_module=settings.vtiger_default_module)
+            if not record:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+                    call_sync = result.scalars().first()
+                    if call_sync:
+                        call_sync.lookup_status = "not_found"
+                        call_sync.updated_at = datetime.utcnow()
+                        await db.commit()
+                return
+
+            self.crm_module = record.module
+            self.crm_record_id = record.record_id
+            self.crm_record_label = record.label
+
+            async with AsyncSessionLocal() as db:
+                link_result = await db.execute(
+                    select(CRMRecordLink).where(
+                        CRMRecordLink.crm_provider == self.crm_provider,
+                        CRMRecordLink.normalized_phone == self.crm_normalized_phone,
+                    )
+                )
+                link = link_result.scalars().first()
+                now = datetime.utcnow()
+                if link:
+                    link.phone_number = self.caller_id
+                    link.crm_module = record.module
+                    link.crm_record_id = record.record_id
+                    link.crm_record_label = record.label
+                    link.updated_at = now
+                    link.last_seen_at = now
+                else:
+                    db.add(
+                        CRMRecordLink(
+                            phone_number=self.caller_id,
+                            normalized_phone=self.crm_normalized_phone,
+                            crm_provider=self.crm_provider,
+                            crm_module=record.module,
+                            crm_record_id=record.record_id,
+                            crm_record_label=record.label,
+                            created_at=now,
+                            updated_at=now,
+                            last_seen_at=now,
+                        )
+                    )
+                sync_result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+                call_sync = sync_result.scalars().first()
+                if call_sync:
+                    call_sync.crm_module = record.module
+                    call_sync.crm_record_id = record.record_id
+                    call_sync.lookup_status = "matched" if not record.created else "created"
+                    call_sync.updated_at = now
+                await db.commit()
+            log.info("Vtiger caller linked", call_id=self.call_id, module=record.module, record_id=record.record_id, created=record.created)
+        except Exception as exc:
+            log.warning("Vtiger caller lookup/create failed", call_id=self.call_id, error=str(exc))
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+                call_sync = result.scalars().first()
+                if call_sync:
+                    call_sync.lookup_status = "error"
+                    call_sync.last_error = str(exc)
+                    call_sync.updated_at = datetime.utcnow()
+                    await db.commit()
+
+    async def _sync_vtiger_on_teardown(self):
+        if not settings.vtiger_enabled:
+            return
+        if self.crm_lookup_task and not self.crm_lookup_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self.crm_lookup_task), timeout=5)
+            except Exception:
+                pass
+        if not self.crm_record_id or not self.crm_module:
+            return
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(CallLog).where(CallLog.call_id == self.call_id))
+            cl = result.scalars().first()
+            if not cl:
+                return
+
+            note_parts = [
+                f"[Helix Call {datetime.utcnow().isoformat(timespec='seconds')} UTC]",
+                f"Caller: {self.caller_id or 'unknown'}",
+                f"Dialed: {self.called_number or 'unknown'}",
+                f"Disposition: {cl.disposition or 'unknown'}",
+                f"Intent: {cl.intent or 'unknown'}",
+            ]
+            if cl.intent_detail:
+                note_parts.append(f"Intent detail: {cl.intent_detail}")
+            if cl.duration_seconds is not None:
+                note_parts.append(f"Duration seconds: {round(cl.duration_seconds, 1)}")
+            if cl.summary:
+                note_parts.append(f"Summary: {cl.summary}")
+            if cl.transcript:
+                transcript_excerpt = cl.transcript.strip()
+                if len(transcript_excerpt) > 2000:
+                    transcript_excerpt = transcript_excerpt[:2000].rstrip() + "..."
+                note_parts.append("Transcript:\n" + transcript_excerpt)
+            note = "\n".join(note_parts)
+
+        client = VtigerClient.from_settings()
+        now = datetime.utcnow()
+        try:
+            await client.append_note_to_record(self.crm_module, self.crm_record_id, note)
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+                call_sync = result.scalars().first()
+                if call_sync:
+                    call_sync.crm_module = self.crm_module
+                    call_sync.crm_record_id = self.crm_record_id
+                    call_sync.sync_status = "synced"
+                    call_sync.synced_at = now
+                    call_sync.updated_at = now
+                    await db.commit()
+            log.info("Vtiger call synced", call_id=self.call_id, module=self.crm_module, record_id=self.crm_record_id)
+        except Exception as exc:
+            log.warning("Vtiger teardown sync failed", call_id=self.call_id, error=str(exc))
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(CRMCallSync).where(CRMCallSync.call_id == self.call_id))
+                call_sync = result.scalars().first()
+                if call_sync:
+                    call_sync.crm_module = self.crm_module
+                    call_sync.crm_record_id = self.crm_record_id
+                    call_sync.sync_status = "error"
+                    call_sync.last_error = str(exc)
+                    call_sync.updated_at = now
+                    await db.commit()
+
     # ── Media setup ───────────────────────────────────────────────────────────
 
     async def _setup_media(self):
@@ -2718,6 +2894,7 @@ class CallHandler:
                     log.error("_teardown: fallback CallLog insert failed",
                               call_id=self.call_id, error=str(_e))
 
+        await self._sync_vtiger_on_teardown()
         await self._release_selected_agent()
 
         if self.agent_media_session:

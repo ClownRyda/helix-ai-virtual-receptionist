@@ -7,7 +7,7 @@ v1.2 additions:
   - PATCH /api/config  (write selected runtime settings back to .env)
   - GET /api/voicemails, GET /api/voicemails/{id}, PATCH /api/voicemails/{id}
 """
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -20,7 +20,18 @@ import json
 from uuid import uuid4
 import structlog
 
-from database import CallLog, Appointment, RoutingRule, Holiday, VoicemailMessage, AgentProfile, Campaign, get_db
+from database import (
+    CallLog,
+    Appointment,
+    RoutingRule,
+    Holiday,
+    VoicemailMessage,
+    AgentProfile,
+    Campaign,
+    CRMRecordLink,
+    CRMCallSync,
+    get_db,
+)
 from routing.router import get_all_rules, upsert_rule
 from routing.agents import (
     list_agents as list_agent_profiles,
@@ -30,6 +41,7 @@ from routing.agents import (
 from gcal.gcal import get_available_slots
 from config import settings
 from ari_agent import get_shared_ari_client
+from integrations.vtiger import VtigerClient, normalize_phone_number
 
 app = FastAPI(title="Helix AI API", version="1.9.0")
 log = structlog.get_logger(__name__)
@@ -832,6 +844,96 @@ async def update_voicemail_status(vm_id: int, body: VoicemailStatusPatch, db: As
     vm.status = body.status
     await db.commit()
     return {"id": vm.id, "status": vm.status}
+
+
+# ── Integrations: Vtiger ────────────────────────────────────────────────────
+
+@app.get("/api/integrations/vtiger/health")
+async def vtiger_health():
+    if not settings.vtiger_enabled:
+        return {"enabled": False, "ok": False, "reason": "VTIGER_ENABLED=false"}
+    client = VtigerClient.from_settings()
+    try:
+        payload = await client.health()
+        payload["enabled"] = True
+        return payload
+    except Exception as exc:
+        log.error("Vtiger health failed", error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/integrations/vtiger/lookup")
+async def vtiger_lookup(phone: str = Query(..., min_length=1), db: AsyncSession = Depends(get_db)):
+    normalized = normalize_phone_number(phone)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Phone number did not contain any digits")
+
+    cached_result = await db.execute(
+        select(CRMRecordLink)
+        .where(
+            CRMRecordLink.crm_provider == "vtiger",
+            CRMRecordLink.normalized_phone == normalized,
+        )
+        .order_by(desc(CRMRecordLink.last_seen_at))
+    )
+    cached = cached_result.scalars().first()
+
+    client = VtigerClient.from_settings()
+    live_record = None
+    if settings.vtiger_enabled:
+        try:
+            live_record = await client.lookup_by_phone(phone)
+        except Exception as exc:
+            log.warning("Vtiger lookup failed", phone=normalized, error=str(exc))
+
+    record_payload = None
+    if live_record:
+        now = datetime.utcnow()
+        if cached:
+            cached.phone_number = phone
+            cached.crm_module = live_record.module
+            cached.crm_record_id = live_record.record_id
+            cached.crm_record_label = live_record.label
+            cached.updated_at = now
+            cached.last_seen_at = now
+        else:
+            db.add(
+                CRMRecordLink(
+                    phone_number=phone,
+                    normalized_phone=normalized,
+                    crm_provider="vtiger",
+                    crm_module=live_record.module,
+                    crm_record_id=live_record.record_id,
+                    crm_record_label=live_record.label,
+                    created_at=now,
+                    updated_at=now,
+                    last_seen_at=now,
+                )
+            )
+        await db.commit()
+    elif cached:
+        pass
+
+    if live_record:
+        record_payload = {
+            "module": live_record.module,
+            "record_id": live_record.record_id,
+            "label": live_record.label,
+            "phone": live_record.phone,
+        }
+    elif cached:
+        record_payload = {
+            "module": cached.crm_module,
+            "record_id": cached.crm_record_id,
+            "label": cached.crm_record_label,
+            "phone": cached.phone_number,
+        }
+
+    return {
+        "enabled": settings.vtiger_enabled,
+        "normalized_phone": normalized,
+        "record": record_payload,
+    }
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
