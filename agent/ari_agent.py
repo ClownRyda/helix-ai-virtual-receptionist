@@ -871,6 +871,10 @@ class ARIClient:
             r.raise_for_status()
             return await r.json()
 
+    async def list_channels(self) -> list[dict]:
+        result = await self.get("/channels")
+        return result if isinstance(result, list) else []
+
     async def post(self, path: str, **kwargs) -> dict | None:
         async with self._session.post(f"{self.base_url}{path}", **kwargs) as r:
             if r.status in (200, 201):
@@ -2941,6 +2945,32 @@ def get_shared_ari_client() -> "ARIClient | None":
     return _shared_ari_client
 
 
+async def _cleanup_stale_external_media(ari: ARIClient):
+    """Best-effort cleanup for orphaned ExternalMedia channels left behind by prior crashes/restarts."""
+    try:
+        channels = await ari.list_channels()
+    except Exception as e:
+        log.warning("Failed to list ARI channels for startup cleanup", error=str(e))
+        return
+
+    stale = [ch for ch in channels if (ch.get("name") or "").startswith("UnicastRTP/")]
+    if not stale:
+        return
+
+    cleaned = 0
+    for channel in stale:
+        channel_id = channel.get("id")
+        if not channel_id:
+            continue
+        try:
+            await ari.hangup(channel_id)
+            cleaned += 1
+        except Exception as e:
+            log.warning("Failed to hang up stale ExternalMedia channel",
+                        channel_id=channel_id, error=str(e))
+    log.info("Startup ExternalMedia cleanup completed", found=len(stale), cleaned=cleaned)
+
+
 def _allocate_rtp_port() -> int:
     for port in range(settings.agent_rtp_port_start, settings.agent_rtp_port_end, 2):
         if port not in _port_pool:
@@ -2975,6 +3005,7 @@ async def run_ari_agent():
     ari = ARIClient()
     await ari.start()
     _shared_ari_client = ari
+    await _cleanup_stale_external_media(ari)
 
     ws_url = (
         f"ws://{settings.asterisk_host}:{settings.asterisk_ari_port}"
