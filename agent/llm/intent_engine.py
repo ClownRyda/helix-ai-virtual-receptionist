@@ -255,7 +255,16 @@ async def generate_response(transcript: str, state: ConversationState, context: 
 
     except Exception as e:
         log.error("Response generation failed", error=str(e))
-        return "I'm sorry, I had a technical issue. Let me transfer you to our operator."
+        fallback = {
+            "en": "I'm sorry, I had a technical issue. Let me transfer you to our operator.",
+            "es": "Lo siento, tuve un problema técnico. Permítame conectarle con un operador.",
+            "fr": "Je suis désolé, j'ai eu un problème technique. Je vais vous transférer à un opérateur.",
+            "it": "Mi dispiace, ho avuto un problema tecnico. La trasferisco a un operatore.",
+            "de": "Entschuldigung, ich hatte ein technisches Problem. Ich verbinde Sie mit einem Mitarbeiter.",
+            "ro": "Îmi pare rău, am avut o problemă tehnică. Vă conectez cu un operator.",
+            "he": "מצטער, הייתה לי תקלה טכנית. אני מחבר אותך לנציג.",
+        }
+        return fallback.get(state.caller_lang, fallback["en"])
 
 
 # ── Call summary ──────────────────────────────────────────────────────────────

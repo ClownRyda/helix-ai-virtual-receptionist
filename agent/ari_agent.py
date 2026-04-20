@@ -30,6 +30,7 @@ import socket
 import struct
 import time
 import uuid
+import unicodedata
 import aiohttp
 import structlog
 from dataclasses import dataclass
@@ -62,6 +63,21 @@ log = structlog.get_logger(__name__)
 
 SECRET_GAME_TRIGGER_PHRASES = {
     "super secret game mode",
+    "super secret mode",
+    "secret game mode",
+    "modo super secreto de juego",
+    "modo de juego super secreto",
+    "modo super secreto",
+    "juego super secreto",
+    "mode jeu super secret",
+    "mode super secret",
+    "modalita gioco super segreta",
+    "modalita super segreta",
+    "supergeheimer spielmodus",
+    "super geheimer spielmodus",
+    "mod joc super secret",
+    "joc super secret",
+    "מצב משחק סודי במיוחד",
 }
 
 SYSTEM_DEMO_TRIGGER_PHRASES = {
@@ -69,10 +85,52 @@ SYSTEM_DEMO_TRIGGER_PHRASES = {
     "demo mode",
     "show me the demo",
     "give me the demo",
+    "demo del sistema",
+    "modo demo",
+    "muéstrame la demo",
+    "muestrame la demo",
+    "dame la demo",
+    "demostracion del sistema",
+    "demostración del sistema",
+    "demo du systeme",
+    "demo du système",
+    "mode demo",
+    "montre moi la demo",
+    "montre-moi la démo",
+    "dimmi la demo",
+    "demo del sistema",
+    "modalita demo",
+    "modalità demo",
+    "mostrami la demo",
+    "systemdemo",
+    "system vorfuhrung",
+    "system vorführung",
+    "demonstratie de sistem",
+    "demonstrație de sistem",
+    "mod demonstratie",
+    "מוד הדגמה",
+    "הדגמת מערכת",
 }
 
 TOP_SECRET_TRIGGER_PHRASES = {
     "top secret mode",
+    "top secret area",
+    "secret area",
+    "modo ultrasecreto",
+    "modo top secret",
+    "area top secret",
+    "area secreta",
+    "zona top secret",
+    "zona secreta",
+    "mode top secret",
+    "zone top secret",
+    "modalita top secret",
+    "area top secret",
+    "top secret modus",
+    "geheimer bereich",
+    "mod top secret",
+    "zona top secret",
+    "מצב סודי ביותר",
 }
 
 LANGUAGE_NAMES = {
@@ -83,6 +141,26 @@ LANGUAGE_NAMES = {
     "de": "German",
     "ro": "Romanian",
     "he": "Hebrew",
+}
+
+LANGUAGE_SWITCH_ALIASES = {
+    "en": {"english", "inglish", "ingles", "inglese", "anglais", "englisch", "engleza", "אנגלית"},
+    "es": {"spanish", "espanol", "español", "castellano", "espaniola", "ספרדית"},
+    "fr": {"french", "francais", "français", "francese", "franzosisch", "franceza", "צרפתית"},
+    "it": {"italian", "italiano", "italien", "italienisch", "italiana", "איטלקית"},
+    "de": {"german", "deutsch", "aleman", "alemán", "allemand", "tedesco", "germana", "גרמנית"},
+    "ro": {"romanian", "romana", "română", "roumain", "rumeno", "רומנית"},
+    "he": {"hebrew", "ivrit", "עברית", "ebraico", "hebreo", "hebreu"},
+}
+
+LANGUAGE_SWITCH_CONFIRMATIONS = {
+    "en": "Understood. I will continue in English until you ask for another language.",
+    "es": "Entendido. Continuaré en español hasta que me pida otro idioma.",
+    "fr": "Très bien. Je vais continuer en français jusqu'à ce que vous demandiez une autre langue.",
+    "it": "Capito. Continuerò in italiano finché non mi chiederà un'altra lingua.",
+    "de": "Verstanden. Ich mache auf Deutsch weiter, bis Sie eine andere Sprache verlangen.",
+    "ro": "Am înțeles. Voi continua în română până când cereți altă limbă.",
+    "he": "הבנתי. אמשיך בעברית עד שתבקש שפה אחרת.",
 }
 
 AGENT_FEATURE_LOGIN = "agent-login"
@@ -382,33 +460,121 @@ def _parse_dtmf_map() -> dict[str, str]:
 
 
 def _is_secret_game_trigger(text: str) -> bool:
-    lowered = (text or "").strip().lower()
-    return any(phrase in lowered for phrase in SECRET_GAME_TRIGGER_PHRASES)
+    normalized = _normalize_trigger_text(text)
+    words = set(normalized.split())
+    if any(_normalize_trigger_text(phrase) in normalized for phrase in SECRET_GAME_TRIGGER_PHRASES):
+        return True
+    secretish = {"secret", "secreto", "secreta", "סודי", "segreta", "supersecret", "supersecreto"}
+    gameish = {"game", "juego", "jeu", "gioco", "spiel", "joc", "משחק"}
+    superish = {"super", "súper", "supersecret", "supersecreto", "supergeheimer", "במיוחד"}
+    if (words & secretish) and (words & gameish):
+        return True
+    if (words & superish) and (words & gameish):
+        return True
+    # If Whisper drops "game" but preserves "super secret ...", bias toward the
+    # game mode rather than top secret. That is the safer interpretation.
+    if (words & superish) and (words & secretish):
+        return True
+    return False
 
 
 def _is_system_demo_trigger(text: str) -> bool:
-    normalized = _normalize_game_prompt((text or "").lower())
-    return any(phrase in normalized for phrase in SYSTEM_DEMO_TRIGGER_PHRASES)
+    normalized = _normalize_trigger_text(text)
+    words = set(normalized.split())
+    if any(_normalize_trigger_text(phrase) in normalized for phrase in SYSTEM_DEMO_TRIGGER_PHRASES):
+        return True
+    demoish = {"demo", "demostracion", "demostración", "demonstration", "demonstratie", "démonstration", "הדגמה"}
+    systemish = {"system", "sistema", "systeme", "système", "sistem", "מערכת"}
+    requestish = {"show", "give", "quiero", "muéstrame", "muestrame", "dame", "mostrami", "montre", "הראה", "תן"}
+    if (words & demoish) and (words & systemish):
+        return True
+    if (words & demoish) and (words & requestish):
+        return True
+    return False
 
 
 def _is_top_secret_trigger(text: str) -> bool:
-    normalized = _normalize_game_prompt(re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()))
+    normalized = _normalize_trigger_text(text)
     words = set(normalized.split())
+    gameish = {"game", "juego", "jeu", "gioco", "spiel", "joc", "משחק"}
+    superish = {"super", "súper", "supersecret", "supersecreto", "supergeheimer", "במיוחד"}
+    if words & gameish:
+        return False
+    if words & superish:
+        return False
     if "topsecret" in words:
         return True
     if {"top", "secret"}.issubset(words):
         return True
-    if {"secret", "mode"}.issubset(words):
+    if any(_normalize_trigger_text(phrase) in normalized for phrase in TOP_SECRET_TRIGGER_PHRASES):
         return True
-    return any(phrase in normalized for phrase in TOP_SECRET_TRIGGER_PHRASES)
+    secretish = {"secret", "secreto", "secreta", "סודי", "geheimer", "ultrasecreto"}
+    placeish = {"area", "zone", "zona", "bereich", "channel", "canal", "realm", "portal", "node", "canal"}
+    accessish = {"access", "acceder", "acceso", "enter", "entrar", "reach", "reached", "open", "abrir", "quiero", "quieres"}
+    if (words & secretish) and (words & placeish):
+        return True
+    if ("top" in words or "ultrasecreto" in words) and (words & secretish):
+        return True
+    if (words & secretish) and (words & accessish) and (words & placeish):
+        return True
+    return False
 
 
 def _language_confirmation(lang: str) -> str:
-    language_name = LANGUAGE_NAMES.get(lang, "English")
-    return (
-        f"I understood you in {language_name}, "
-        f"I will proceed in {language_name} until you speak another language."
+    confirmations = {
+        "en": "I understood you in English, I will proceed in English until you speak another language.",
+        "es": "Le entendí en español. Continuaré en español hasta que usted hable otro idioma.",
+        "fr": "Je vous ai compris en français. Je continuerai en français jusqu'à ce que vous parliez une autre langue.",
+        "it": "L'ho capita in italiano. Continuerò in italiano finché non parlerà un'altra lingua.",
+        "de": "Ich habe Sie auf Deutsch verstanden. Ich spreche weiter Deutsch, bis Sie eine andere Sprache sprechen.",
+        "ro": "V-am înțeles în română. Voi continua în română până când vorbiți altă limbă.",
+        "he": "הבנתי אותך בעברית. אמשיך בעברית עד שתדבר בשפה אחרת.",
+    }
+    return confirmations.get(lang, confirmations["en"])
+
+
+def _normalize_trigger_text(text: str) -> str:
+    cleaned = unicodedata.normalize("NFKD", text or "")
+    cleaned = "".join(ch for ch in cleaned if not unicodedata.combining(ch))
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned.lower(), flags=re.UNICODE)
+    return " ".join(cleaned.split())
+
+
+def _detect_language_switch(english_text: str, raw_text: str = "") -> str | None:
+    combined = f"{english_text or ''} {raw_text or ''}"
+    normalized = _normalize_trigger_text(combined)
+    switch_markers = (
+        "speak",
+        "in ",
+        "switch",
+        "continue",
+        "use",
+        "habla",
+        "hable",
+        "en ",
+        "cambia",
+        "continuez",
+        "parlez",
+        "sprich",
+        "sprechen",
+        "vorbeste",
+        "vorbiti",
+        "דבר",
+        "עבר",
     )
+    courtesy_markers = ("please", "por favor", "svp", "s il vous plait", "per favore", "bitte", "te rog", "בבקשה")
+    has_switch_signal = any(marker in normalized for marker in switch_markers) or any(marker in normalized for marker in courtesy_markers)
+    for lang, aliases in LANGUAGE_SWITCH_ALIASES.items():
+        for alias in aliases:
+            if (
+                normalized == alias
+                or normalized.startswith(f"{alias} ")
+                or normalized.endswith(f" {alias}")
+                or f" {alias} " in f" {normalized} "
+            ):
+                if has_switch_signal or len(normalized.split()) <= 3:
+                    return lang
+    return None
 
 
 def _normalize_game_prompt(text: str) -> str:
@@ -839,7 +1005,8 @@ class CallHandler:
         # DTMF events from the main ARI loop are pushed into this queue
         self.dtmf_queue: asyncio.Queue = dtmf_queue or asyncio.Queue()
         self.vad: SileroVADEngine | None = None
-        self._pending_top_secret_trigger: bool = False
+        self._pending_hidden_mode: str = ""
+        self._pending_hidden_mode_lang: str = "en"
         self.handoff_active: bool = False
         self.selected_agent: AgentRoute | None = None
         self.selected_agent_profile_id: str = ""
@@ -1184,11 +1351,7 @@ class CallHandler:
         """
         greeting = self._build_greeting("en", after_hours=after_hours)
         await self._speak(greeting, language="en")
-        if self._pending_top_secret_trigger:
-            self._pending_top_secret_trigger = False
-            self.state.caller_lang = "en"
-            self.state.lang_confirmed = True
-            await self._enter_top_secret_mode("en")
+        if await self._consume_pending_hidden_mode():
             return
 
         # DTMF menu announcement (if enabled)
@@ -1204,11 +1367,7 @@ class CallHandler:
             if menu_parts:
                 dtmf_msg = "Or if you prefer, " + ", or ".join(menu_parts) + "."
                 await self._speak(dtmf_msg, language="en")
-                if self._pending_top_secret_trigger:
-                    self._pending_top_secret_trigger = False
-                    self.state.caller_lang = "en"
-                    self.state.lang_confirmed = True
-                    await self._enter_top_secret_mode("en")
+                if await self._consume_pending_hidden_mode():
                     return
 
         self.call_path.record("greeted", lang="en", after_hours=after_hours)
@@ -1223,7 +1382,7 @@ class CallHandler:
             await self._speak("I'm sorry, I didn't catch that. How can I help you today?", language="en")
             return
 
-        utterance, detected_lang = listen_result
+        utterance, detected_lang, raw_utterance = listen_result
         self.state.caller_lang = detected_lang
         self.state.lang_confirmed = True
         self.state.retry_count = 0
@@ -1231,11 +1390,53 @@ class CallHandler:
         log.info("Caller language detected", lang=detected_lang, call_id=self.call_id)
         self.call_path.record("language_detected", lang=detected_lang)
 
+        # If the caller's very first utterance is a hidden-mode request or a
+        # direct language switch, skip the generic localized greeting replay and
+        # jump straight into the requested mode/language.
+        switch_lang = _detect_language_switch(utterance, raw_utterance)
+        if switch_lang and switch_lang != detected_lang:
+            self.state.caller_lang = switch_lang
+            self.call_path.record("language_switch_requested", turn=0, from_lang=detected_lang, to_lang=switch_lang)
+            await self._speak(LANGUAGE_SWITCH_CONFIRMATIONS.get(switch_lang, LANGUAGE_SWITCH_CONFIRMATIONS["en"]), language=switch_lang)
+            return
+
+        if _is_secret_game_trigger(utterance) or _is_secret_game_trigger(raw_utterance):
+            await self._enter_secret_game_mode(detected_lang)
+            return
+
+        if _is_top_secret_trigger(utterance) or _is_top_secret_trigger(raw_utterance):
+            await self._enter_top_secret_mode(detected_lang)
+            return
+
+        if _is_system_demo_trigger(utterance) or _is_system_demo_trigger(raw_utterance):
+            await self._enter_system_demo_mode(detected_lang, reason="explicit")
+            return
+
         if detected_lang != "en":
             greeting_localized = self._build_greeting(detected_lang, after_hours=after_hours)
             await self._speak(greeting_localized, language=detected_lang)
 
-        self._first_utterance = (utterance, detected_lang)
+        self._first_utterance = (utterance, detected_lang, raw_utterance)
+
+    async def _consume_pending_hidden_mode(self) -> bool:
+        if not self._pending_hidden_mode:
+            return False
+        mode = self._pending_hidden_mode
+        lang = self._pending_hidden_mode_lang or "en"
+        self._pending_hidden_mode = ""
+        self._pending_hidden_mode_lang = "en"
+        self.state.caller_lang = lang
+        self.state.lang_confirmed = True
+        if mode == "top_secret":
+            await self._enter_top_secret_mode(lang)
+            return True
+        if mode == "secret_game":
+            await self._enter_secret_game_mode(lang)
+            return True
+        if mode == "system_demo":
+            await self._enter_system_demo_mode(lang, reason="explicit")
+            return True
+        return False
 
     def _build_greeting(self, lang: str, after_hours: bool = False) -> str:
         name  = settings.business_name
@@ -1451,10 +1652,9 @@ class CallHandler:
         self.state.secret_game_rule_steps_done = set()
         self.call_path.record("secret_game_mode_enabled", lang=lang)
         await self._speak(_language_confirmation(lang), language=lang)
-        intro = (
-            "Super secret game mode activated. Think of something. "
-            "Answer only yes, no, maybe, or unknown."
-        )
+        intro = "Super secret game mode activated. Think of something. Answer only yes, no, maybe, or unknown."
+        if lang != "en":
+            intro = await localize_for_caller(intro, lang)
         await self._speak(intro, language=lang)
         prompt_type, prompt_text = await self._secret_game_next_prompt(lang)
         if prompt_type == "guess":
@@ -1474,14 +1674,20 @@ class CallHandler:
         if any(word in lowered for word in ["stop game", "exit game", "quit game", "end game"]):
             self.state.secret_game_mode = False
             self.state.secret_game_last_guess = None
-            await self._speak("Exiting super secret game mode. How can I help you today?", language=lang)
+            exit_msg = "Exiting super secret game mode. How can I help you today?"
+            if lang != "en":
+                exit_msg = await localize_for_caller(exit_msg, lang)
+            await self._speak(exit_msg, language=lang)
             return True
 
         if self.state.secret_game_last_guess:
             if any(word in lowered for word in ["yes", "yeah", "yep", "correct", "right"]):
                 self.state.secret_game_mode = False
                 self.state.secret_game_last_guess = None
-                await self._speak("Nice. I guessed it. We can play again any time.", language=lang)
+                win_msg = "Nice. I guessed it. We can play again any time."
+                if lang != "en":
+                    win_msg = await localize_for_caller(win_msg, lang)
+                await self._speak(win_msg, language=lang)
                 return True
             if any(word in lowered for word in ["no", "nope", "wrong", "incorrect"]):
                 self.state.secret_game_last_guess = None
@@ -1489,7 +1695,10 @@ class CallHandler:
 
         if self.state.secret_game_questions_asked >= 20:
             self.state.secret_game_mode = False
-            await self._speak("I am out of questions. You win. We can play again any time.", language=lang)
+            lose_msg = "I am out of questions. You win. We can play again any time."
+            if lang != "en":
+                lose_msg = await localize_for_caller(lose_msg, lang)
+            await self._speak(lose_msg, language=lang)
             return True
 
         await self._secret_game_update_summary(lang)
@@ -1514,6 +1723,8 @@ class CallHandler:
         self.state.top_secret_history = []
         self.call_path.record("top_secret_mode_enabled", lang=lang)
         intro_text = _top_secret_intro_text()
+        if lang != "en":
+            intro_text = await localize_for_caller(intro_text, lang)
         await self._speak(intro_text, language=lang)
 
     async def _enter_system_demo_mode(self, lang: str, reason: str = ""):
@@ -1526,12 +1737,13 @@ class CallHandler:
             )
         await self._speak_system_demo_script(language=lang)
 
-    async def _top_secret_reply(self, utterance: str) -> str:
+    async def _top_secret_reply(self, utterance: str, lang: str) -> str:
         history_lines = []
         for item in self.state.top_secret_history[-10:]:
             history_lines.append(f"{item['role']}: {item['text']}")
         history_text = "\n".join(history_lines) or "No history."
         user_prompt = (
+            f"Reply in {LANGUAGE_NAMES.get(lang, 'English')}.\n"
             f"Conversation history:\n{history_text}\n\n"
             f"Latest caller input:\n{utterance}"
         )
@@ -1560,10 +1772,13 @@ class CallHandler:
 
         if any(word in lowered for word in ["exit top secret mode", "leave top secret mode", "quit top secret mode"]):
             self.state.top_secret_mode = False
-            await self._speak("Top secret mode disengaged. How can I help you today?", language=lang)
+            exit_msg = "Top secret mode disengaged. How can I help you today?"
+            if lang != "en":
+                exit_msg = await localize_for_caller(exit_msg, lang)
+            await self._speak(exit_msg, language=lang)
             return True
 
-        reply = await self._top_secret_reply(utterance)
+        reply = await self._top_secret_reply(utterance, lang)
         self.state.top_secret_history.append({"role": "assistant", "text": reply})
         await self._speak(reply, language=lang)
         return True
@@ -1877,11 +2092,7 @@ class CallHandler:
         lang = self.state.caller_lang
 
         while self.state.turn_count < max_turns:
-            if self._pending_top_secret_trigger:
-                self._pending_top_secret_trigger = False
-                self.state.caller_lang = "en"
-                self.state.lang_confirmed = True
-                await self._enter_top_secret_mode("en")
+            if await self._consume_pending_hidden_mode():
                 continue
 
             # On the first turn, consume the utterance captured in _greet()
@@ -1935,7 +2146,7 @@ class CallHandler:
                 await self._speak(sorry, language=lang)
                 continue
 
-            utterance, detected_lang = listen_result
+            utterance, detected_lang, raw_utterance = listen_result
             self.state.retry_count = 0  # Reset on successful speech
 
             # Language lock
@@ -1945,20 +2156,43 @@ class CallHandler:
                 if self.state.turn_count >= 1:
                     self.state.lang_confirmed = True
 
-            self.transcript_log.append(f"Caller [{detected_lang}]: {utterance}")
-            self.call_path.record("utterance", turn=self.state.turn_count, lang=detected_lang, text=utterance[:60])
+            switch_lang = _detect_language_switch(utterance, raw_utterance)
+            if switch_lang and switch_lang != lang:
+                self.state.caller_lang = switch_lang
+                self.state.lang_confirmed = True
+                lang = switch_lang
+                self.call_path.record("language_switch_requested", turn=self.state.turn_count, from_lang=detected_lang, to_lang=switch_lang)
+                await self._speak(LANGUAGE_SWITCH_CONFIRMATIONS.get(switch_lang, LANGUAGE_SWITCH_CONFIRMATIONS["en"]), language=switch_lang)
+                continue
 
-            if _is_top_secret_trigger(utterance):
+            # If the caller simply starts speaking a different supported language,
+            # follow them automatically instead of forcing an explicit switch command.
+            if (
+                detected_lang in LANGUAGE_NAMES
+                and detected_lang != lang
+                and len((raw_utterance or "").strip()) >= 4
+            ):
+                previous_lang = lang
+                self.state.caller_lang = detected_lang
+                self.state.lang_confirmed = True
+                lang = detected_lang
+                self.call_path.record("language_auto_switched", turn=self.state.turn_count, from_lang=previous_lang, to_lang=detected_lang)
+                await self._speak(LANGUAGE_SWITCH_CONFIRMATIONS.get(detected_lang, LANGUAGE_SWITCH_CONFIRMATIONS["en"]), language=detected_lang)
+
+            self.transcript_log.append(f"Caller [{detected_lang}]: {raw_utterance}")
+            self.call_path.record("utterance", turn=self.state.turn_count, lang=detected_lang, text=raw_utterance[:60])
+
+            if _is_secret_game_trigger(utterance) or _is_secret_game_trigger(raw_utterance):
+                await self._enter_secret_game_mode(lang)
+                continue
+
+            if _is_top_secret_trigger(utterance) or _is_top_secret_trigger(raw_utterance):
                 await self._enter_top_secret_mode(lang)
                 continue
 
             if _is_system_demo_trigger(utterance):
                 await self._enter_system_demo_mode(lang, reason="explicit")
                 self.state.intent = "info"
-                continue
-
-            if _is_secret_game_trigger(utterance):
-                await self._enter_secret_game_mode(lang)
                 continue
 
             if self.state.top_secret_mode:
@@ -2177,18 +2411,20 @@ class CallHandler:
 
     # ── Listen ────────────────────────────────────────────────────────────────
 
-    async def _listen(self) -> tuple[str, str] | None:
+    async def _listen(self) -> tuple[str, str, str] | None:
         """
         Read audio from RTP until Silero VAD detects end-of-speech.
-        Returns (english_transcript, detected_lang) or None on silence/timeout.
+        Returns (english_transcript, detected_lang, raw_transcript) or None on silence/timeout.
         """
         audio_buffer = bytearray()
         speech_started = False
         max_frames = int(MAX_UTTERANCE_SECONDS * 1000 / FRAME_MS)
         total_frames = 0
         no_data_count = 0
-        # Use configured silence timeout
-        max_initial_silence_frames = int(settings.silence_timeout_sec * 1000 / FRAME_MS)
+        # Be a bit more patient on the phone before declaring silence; short
+        # mobile/WAN gaps and caller hesitation are common in live use.
+        effective_silence_timeout = max(settings.silence_timeout_sec, 12)
+        max_initial_silence_frames = int(effective_silence_timeout * 1000 / FRAME_MS)
         loop = asyncio.get_event_loop()
 
         vad = self._get_vad()
@@ -2236,18 +2472,19 @@ class CallHandler:
             return None
 
         detected_lang = result.language
-        english_text = result.text
+        raw_text = result.text
+        english_text = raw_text
 
         if detected_lang != "en":
-            english_text, _ = await ensure_english(result.text, detected_lang)
+            english_text, _ = await ensure_english(raw_text, detected_lang)
             log.info("Translated caller utterance",
-                     original=result.text[:60],
+                     original=raw_text[:60],
                      translated=english_text[:60],
                      lang=detected_lang)
 
-        return english_text, detected_lang
+        return english_text, detected_lang, raw_text
 
-    async def _listen_for_top_secret_barge_in(self, stop_event: asyncio.Event) -> bool:
+    async def _listen_for_hidden_mode_barge_in(self, stop_event: asyncio.Event) -> bool:
         if not self.rtp_sock:
             return False
         audio_buffer = bytearray()
@@ -2286,10 +2523,25 @@ class CallHandler:
                                 english_text = heard
                                 if result.language != "en":
                                     english_text, _ = await ensure_english(heard, result.language)
+                                if _is_secret_game_trigger(english_text) or _is_secret_game_trigger(heard):
+                                    self._pending_hidden_mode = "secret_game"
+                                    self._pending_hidden_mode_lang = result.language if result.language in LANGUAGE_NAMES else "en"
+                                    log.info("Secret game barge-in detected",
+                                             heard=heard[:80], translated=english_text[:80], lang=self._pending_hidden_mode_lang, call_id=self.call_id)
+                                    stop_event.set()
+                                    return True
+                                if _is_system_demo_trigger(english_text) or _is_system_demo_trigger(heard):
+                                    self._pending_hidden_mode = "system_demo"
+                                    self._pending_hidden_mode_lang = result.language if result.language in LANGUAGE_NAMES else "en"
+                                    log.info("System demo barge-in detected",
+                                             heard=heard[:80], translated=english_text[:80], lang=self._pending_hidden_mode_lang, call_id=self.call_id)
+                                    stop_event.set()
+                                    return True
                                 if _is_top_secret_trigger(english_text) or _is_top_secret_trigger(heard):
-                                    self._pending_top_secret_trigger = True
+                                    self._pending_hidden_mode = "top_secret"
+                                    self._pending_hidden_mode_lang = result.language if result.language in LANGUAGE_NAMES else "en"
                                     log.info("Top secret barge-in detected",
-                                             heard=heard[:80], translated=english_text[:80], call_id=self.call_id)
+                                             heard=heard[:80], translated=english_text[:80], lang=self._pending_hidden_mode_lang, call_id=self.call_id)
                                     stop_event.set()
                                     return True
                         audio_buffer = bytearray()
@@ -2314,7 +2566,7 @@ class CallHandler:
         pcm = await loop.run_in_executor(None, synthesize_pcm, text, language, voice_override)
         if pcm and self.rtp_sock:
             stop_event = asyncio.Event()
-            barge_task = asyncio.create_task(self._listen_for_top_secret_barge_in(stop_event))
+            barge_task = asyncio.create_task(self._listen_for_hidden_mode_barge_in(stop_event))
             try:
                 await self.rtp_sock.stream_pcm(pcm, stop_event=stop_event)
             finally:
