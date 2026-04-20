@@ -7,7 +7,17 @@
 ![Ollama](https://img.shields.io/badge/LLM-ollama%20local-purple)
 ![Stars](https://img.shields.io/github/stars/BB-AI-Arena/helix-ai-virtual-receptionist?style=flat)
 
-Helix is a production-ready, self-hosted AI voice receptionist and multilingual contact-center front door for businesses that want modern call handling without handing their phone traffic to the cloud. It answers inbound calls, detects caller language, carries natural voice conversations, handles business-hours and after-hours flows, schedules callbacks, routes to live human agents, and activates real-time translation automatically when caller and agent speak different languages.
+Helix is a production-ready, self-hosted AI phone system for businesses that want more than a chatbot bolted onto a phone line. It works as an AI receptionist, multilingual front desk, live-agent routing layer, translation bridge, after-hours assistant, scheduling assistant, voicemail system, and operational dashboard in one stack.
+
+In practical terms, Helix can:
+- answer inbound calls and speak naturally with callers
+- detect and switch languages during the call
+- route to the right live agent based on queue, availability, and language
+- translate live conversations when caller and agent do not share a language
+- handle after-hours flows with callback, voicemail, scheduling, or emergency routing
+- book appointments against Google Calendar
+- support normal PBX behavior like direct extension dialing, voicemail fallback, and hold music
+- expose call logs, routing rules, voicemails, holidays, agent state, and outbound scaffolding in a live dashboard
 
 Built for operators who care about control, privacy, and reliability, Helix runs on your own infrastructure with Asterisk ARI, Ollama, Whisper, Kokoro TTS, FastAPI, and a live dashboard. No subscriptions. No per-minute API billing. No external speech or LLM provider required.
 
