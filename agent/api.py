@@ -215,6 +215,14 @@ async def list_calls(
     ]
 
 
+# ── Live active calls ─────────────────────────────────────────────────────────
+
+@app.get("/api/calls/active")
+async def get_active_calls_endpoint():
+    """Returns in-progress calls from the ARI agent runtime (not the DB)."""
+    return get_active_calls()
+
+
 @app.get("/api/calls/{call_id}")
 async def get_call(call_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CallLog).where(CallLog.call_id == call_id))
@@ -302,14 +310,6 @@ async def get_daily_stats(db: AsyncSession = Depends(get_db)):
         if row.day in counts:
             counts[row.day] = row.calls
     return [{"date": k, "calls": v} for k, v in counts.items()]
-
-
-# ── Live active calls ─────────────────────────────────────────────────────────
-
-@app.get("/api/calls/active")
-async def get_active_calls_endpoint():
-    """Returns in-progress calls from the ARI agent runtime (not the DB)."""
-    return get_active_calls()
 
 
 # ── Routing rules ─────────────────────────────────────────────────────────────
