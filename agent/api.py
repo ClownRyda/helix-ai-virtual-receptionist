@@ -40,7 +40,7 @@ from routing.agents import (
 )
 from gcal.gcal import get_available_slots
 from config import settings
-from ari_agent import get_shared_ari_client
+from ari_agent import get_shared_ari_client, get_active_calls
 from integrations.vtiger import VtigerClient, normalize_phone_number
 
 app = FastAPI(title="Helix AI API", version="1.9.0")
@@ -302,6 +302,15 @@ async def get_daily_stats(db: AsyncSession = Depends(get_db)):
         if row.day in counts:
             counts[row.day] = row.calls
     return [{"date": k, "calls": v} for k, v in counts.items()]
+
+
+# ── Live active calls ─────────────────────────────────────────────────────────
+
+@app.get("/api/calls/active")
+async def get_active_calls_endpoint():
+    """Returns in-progress calls from the ARI agent runtime (not the DB)."""
+    return get_active_calls()
+
 
 # ── Routing rules ─────────────────────────────────────────────────────────────
 
@@ -940,10 +949,54 @@ async def vtiger_lookup(phone: str = Query(..., min_length=1), db: AsyncSession 
 
 @app.get("/api/health")
 async def health():
+    import os, httpx
+
+    # ── ARI connectivity check ────────────────────────────────────────────────
+    ari_ok = False
+    ari_detail = "not checked"
+    try:
+        ari_url = (
+            f"http://{settings.asterisk_host}:{settings.asterisk_ari_port}"
+            f"/ari/asterisk/info"
+        )
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(
+                ari_url,
+                auth=(settings.asterisk_ari_user, settings.asterisk_ari_password),
+            )
+        ari_ok = r.status_code == 200
+        ari_detail = "connected" if ari_ok else f"HTTP {r.status_code}"
+    except Exception as e:
+        ari_detail = str(e)[:80]
+
+    # ── MOH asset sanity check ────────────────────────────────────────────────
+    # At least one .wav/.alaw/.ulaw should exist in the MOH default dir.
+    moh_dir = "/var/lib/asterisk/moh"
+    moh_ok = False
+    moh_detail = "not found"
+    try:
+        files = os.listdir(moh_dir)
+        audio_files = [f for f in files if f.endswith((".wav", ".alaw", ".ulaw", ".mp3", ".gsm"))]
+        moh_ok = len(audio_files) > 0
+        moh_detail = f"{len(audio_files)} file(s)" if moh_ok else "no audio files"
+    except FileNotFoundError:
+        moh_detail = f"{moh_dir} not found"
+    except Exception as e:
+        moh_detail = str(e)[:80]
+
+    # ── Voicemail spool sanity check ──────────────────────────────────────────
+    vm_spool = "/var/spool/asterisk/voicemail"
+    vm_ok = os.path.isdir(vm_spool)
+    vm_detail = "present" if vm_ok else f"{vm_spool} not found"
+
+    # ── Overall status ────────────────────────────────────────────────────────
+    checks_ok = ari_ok and moh_ok and vm_ok
+    overall = "ok" if checks_ok else ("degraded" if ari_ok else "error")
+
     return {
-        "status": "ok",
+        "status": overall,
         "service": "helix-ai",
-        "version": "1.9.0",
+        "version": "1.9.5",
         "tts_engine": "Kokoro",
         "tts_voices": {
             "en": settings.kokoro_voice_en,
@@ -956,5 +1009,10 @@ async def health():
             "call_summary": settings.call_summary_enabled,
             "faq": settings.faq_enabled,
             "dtmf": settings.dtmf_enabled,
-        }
+        },
+        "checks": {
+            "ari":       {"ok": ari_ok,  "detail": ari_detail},
+            "moh":       {"ok": moh_ok,  "detail": moh_detail},
+            "voicemail": {"ok": vm_ok,   "detail": vm_detail},
+        },
     }

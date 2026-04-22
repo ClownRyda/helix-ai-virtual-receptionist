@@ -1,3 +1,4 @@
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, Tooltip, ResponsiveContainer, XAxis } from "recharts";
 import { Link } from "wouter";
@@ -13,6 +14,30 @@ import DispositionBadge from "@/components/DispositionBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface DailyStat { date: string; calls: number; }
+interface ActiveCall {
+  call_id: string;
+  channel_id: string;
+  caller_id: string;
+  started_at: string;
+  elapsed_seconds: number;
+}
+
+/** Ticks elapsed seconds every second for a single active call. */
+function useLiveElapsed(baseElapsed: number, startedAt: string): number {
+  const [elapsed, setElapsed] = React.useState(baseElapsed);
+  React.useEffect(() => {
+    setElapsed(baseElapsed);
+    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(id);
+  }, [startedAt, baseElapsed]);
+  return elapsed;
+}
+
+function fmtElapsed(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return m > 0 ? `${m}m ${sec.toString().padStart(2, "0")}s` : `${sec}s`;
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -85,6 +110,22 @@ function InfoRow({ label, value, mono = false }: { label: string; value: React.R
 
 // ── Main component ─────────────────────────────────────────────────────────
 
+
+function ActiveCallRow({ call }: { call: ActiveCall }) {
+  const elapsed = useLiveElapsed(call.elapsed_seconds, call.started_at);
+  return (
+    <div className="flex items-center justify-between px-5 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className="status-dot active" />
+        <span className="text-sm font-mono text-foreground">{call.caller_id}</span>
+      </div>
+      <span className="text-xs font-mono text-muted-foreground tabular-nums">
+        {fmtElapsed(elapsed)}
+      </span>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useQuery<CallStats>({
     queryKey: ["/api/stats"],
@@ -146,6 +187,12 @@ export default function Dashboard() {
     queryKey: ["/api/stats/daily"],
     queryFn: () => fetchJSON("/api/stats/daily"),
     refetchInterval: 60_000,
+  });
+
+  const { data: activeCalls } = useQuery<ActiveCall[]>({
+    queryKey: ["/api/calls/active"],
+    queryFn: () => fetchJSON("/api/calls/active"),
+    refetchInterval: 5_000,
   });
 
   const dailyMax = Math.max(1, ...(daily?.map((d) => d.calls) ?? [0]));
@@ -477,15 +524,60 @@ export default function Dashboard() {
         {/* Right col (1/3) */}
         <div className="space-y-5">
 
-          {/* System status */}
+          {/* System status — backed by /api/health checks */}
           <div className="bg-card border border-border rounded-lg overflow-hidden">
             <SectionHeader title="System Status" />
             <div className="divide-y divide-border">
+              {/* Live ARI check */}
+              {(() => {
+                const ariCheck = (health as any)?.checks?.ari;
+                const ok = ariCheck?.ok ?? null;
+                const detail = ariCheck?.detail ?? "";
+                return (
+                  <div className="flex items-center justify-between px-5 py-2.5">
+                    <div>
+                      <span className="text-sm text-foreground">Asterisk ARI</span>
+                      {detail && !ok && (
+                        <span className="ml-2 text-xs text-rose-400 font-mono">{detail}</span>
+                      )}
+                    </div>
+                    <span className={`status-dot ${ok === null ? "active" : ok ? "online" : "offline"}`} />
+                  </div>
+                );
+              })()}
+              {/* MOH check */}
+              {(() => {
+                const mohCheck = (health as any)?.checks?.moh;
+                const ok = mohCheck?.ok ?? null;
+                const detail = mohCheck?.detail ?? "";
+                return (
+                  <div className="flex items-center justify-between px-5 py-2.5">
+                    <div>
+                      <span className="text-sm text-foreground">Hold Music (MOH)</span>
+                      {detail && (
+                        <span className="ml-2 text-xs text-muted-foreground font-mono">{detail}</span>
+                      )}
+                    </div>
+                    <span className={`status-dot ${ok === null ? "active" : ok ? "online" : "offline"}`} />
+                  </div>
+                );
+              })()}
+              {/* Voicemail spool check */}
+              {(() => {
+                const vmCheck = (health as any)?.checks?.voicemail;
+                const ok = vmCheck?.ok ?? null;
+                return (
+                  <div className="flex items-center justify-between px-5 py-2.5">
+                    <span className="text-sm text-foreground">Voicemail Spool</span>
+                    <span className={`status-dot ${ok === null ? "active" : ok ? "online" : "offline"}`} />
+                  </div>
+                );
+              })()}
+              {/* Static known-good services */}
               {[
-                { label: "Asterisk ARI", ok: true },
-                { label: "Ollama LLM", ok: true },
-                { label: "Whisper STT", ok: true },
-                { label: "Piper TTS", ok: true },
+                { label: `${(health as any)?.tts_engine ?? "Kokoro"} TTS`, ok: true },
+                { label: "Ollama LLM",      ok: true },
+                { label: "Whisper STT",     ok: true },
                 { label: "Google Calendar", ok: true },
               ].map(({ label, ok }) => (
                 <div key={label} className="flex items-center justify-between px-5 py-2.5">
@@ -495,9 +587,30 @@ export default function Dashboard() {
               ))}
               <div className="flex items-center justify-between px-5 py-2.5">
                 <span className="text-sm text-foreground">Version</span>
-                <span className="text-xs font-mono text-primary">{health?.version ?? "v1.2"}</span>
+                <span className="text-xs font-mono text-primary">{health?.version ?? "—"}</span>
               </div>
             </div>
+          </div>
+
+          {/* Live active calls card */}
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <SectionHeader title="Active Calls" />
+            {!activeCalls ? (
+              <div className="p-4 space-y-2">
+                <Skeleton className="h-8 w-full" />
+              </div>
+            ) : activeCalls.length === 0 ? (
+              <div className="px-5 py-4 text-sm text-muted-foreground flex items-center gap-2">
+                <Phone size={13} className="opacity-40" />
+                No active calls
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {activeCalls.map((call) => (
+                  <ActiveCallRow key={call.channel_id} call={call} />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Business hours */}
