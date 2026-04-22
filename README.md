@@ -468,6 +468,7 @@ cp agent/.env.example agent/.env
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/calls` | List call logs |
+| `GET` | `/api/calls/active` | Snapshot of in-progress calls from the live ARI runtime |
 | `GET` | `/api/calls/{id}` | Call detail + transcript + call-path JSON + summary |
 | `GET` | `/api/stats` | Aggregate call stats |
 | `GET` | `/api/stats/daily` | Per-day call counts for last 7 days |
@@ -485,7 +486,7 @@ cp agent/.env.example agent/.env
 | `GET` | `/api/voicemails` | List voicemail messages |
 | `GET` | `/api/voicemails/{id}` | Voicemail detail + transcript |
 | `PATCH` | `/api/voicemails/{id}` | Update voicemail status (unread/read/archived) |
-| `GET` | `/api/health` | Health check + version + feature flags + TTS engine |
+| `GET` | `/api/health` | Health check + version + feature flags + TTS engine + system checks |
 | `GET` | `/api/agents` | List all registered agents with state, language, queues |
 | `POST` | `/api/agents/register` | Register a new agent |
 | `PATCH` | `/api/agents/{agent_id}` | Update agent fields (language, queues, state) |
@@ -542,14 +543,13 @@ Access at `http://YOUR_SERVER_IP` (nginx port 80 in production) or `http://local
 
 | Page | What it shows |
 |---|---|
-| Dashboard | Live stats: total calls, scheduled, transferred, after-hours, avg duration; 7-day call volume sparkline |
+| Dashboard | Live stats, active calls card, system status checks, and 7-day call volume sparkline |
 | Call Logs | Searchable call history with intent and disposition badges |
 | Call Detail | Full transcript + structured call-path events + LLM summary |
 | Routing | Keyword → extension rules with agent language (inline CRUD) |
 | Agents | Register agents, manage language/queue/state, see current call + last-offered data |
 | Appointments | Scheduled callbacks with Google Calendar status |
 | Voicemails | After-hours voicemail inbox with status badges, transcript, and archive actions |
-| Agents | Agent roster — extensions, languages, routing assignments |
 | Settings | Current agent configuration — all feature flags, business hours, TTS, LLM settings |
 
 ---
@@ -593,9 +593,12 @@ manually and reload.
 
 ### Firewall
 ```bash
-sudo ufw allow 5060/udp
-sudo ufw allow 10000:20000/udp
+sudo ufw allow from 192.168.1.0/24 to any port 5060 proto udp
+sudo ufw allow from 192.168.1.0/24 to any port 10000:20000 proto udp
 ```
+
+Do not expose SIP/RTP to `Anywhere` unless you have a real trunk or remote-phone
+allowlist in front of it. Public `5060/udp` gets scanned constantly.
 
 ---
 
@@ -674,17 +677,18 @@ See `systemd/ollama.service.reference` for exact override instructions.
 
 ### 7 — Firewall
 ```bash
-bash scripts/firewall.sh   # Opens SIP (5060), RTP (10000-20100), HTTP (80), HTTPS (443)
-                            # Agent (8000), ARI (8088), Dashboard (3001) stay loopback-only
+bash scripts/firewall.sh 192.168.1.0/24
+                         # SSH/HTTP/HTTPS stay public; SIP/RTP are restricted to your LAN subnet
+                         # Agent (8000), ARI (8088), Dashboard (3001) stay loopback-only
 ```
 
 ### Port map (production)
 | Service | Port | Binding |
 |---|---|---|
 | nginx (HTTP/HTTPS) | 80 / 443 | all interfaces |
-| SIP | 5060 | all interfaces |
-| RTP | 10000–19999 | all interfaces |
-| Agent RTP | 20000–20100 | all interfaces |
+| SIP | 5060 | all interfaces, firewall-restricted to trusted subnet |
+| RTP | 10000–19999 | all interfaces, firewall-restricted to trusted subnet |
+| Agent RTP | 20000–20100 | all interfaces, firewall-restricted to trusted subnet |
 | Asterisk ARI | 8088 | 127.0.0.1 only |
 | Python Agent API | 8000 | 127.0.0.1 only |
 | Dashboard | 3001 | 127.0.0.1 only (3000 reserved for Open WebUI) |
@@ -819,6 +823,7 @@ Windows Docker Desktop testing always runs on CPU — slower but functional for 
 | **v1.6.1–v1.6.9** | Production hardening: all services bind to 127.0.0.1; systemd units; nginx reverse proxy; logrotate; SQLite backup script; CORS hardening; RTP port overlap fix; `chan_sip` disabled; Docker dashboard loopback-only; various `onboard.sh` and config fixes |
 | **v1.7.0–v1.7.5** | Silero VAD `trust_repo=True` crash fix; Kokoro voices exposed in `/api/config`; `.env` migration script; `update-live-install.sh` safe upgrade script; `StasisEnd` bridge-transition fix; `asyncio.sleep(0)` handler start fix; backgrounded initial DB insert; `ChannelHangupRequest` silent-call root cause fix |
 | **v1.8.0** | ExternalMedia codec switched to PCMU/ulaw with PCM16↔ulaw transcode helpers; RTP streamed at real-time 20 ms pacing; `UnicastRTP` StasisStart events ignored; Whisper/Kokoro/Silero VAD all prewarmed at startup; WAN IP auto-detection in `onboard.sh`; dashboard voicemail inbox + 7-day sparkline + sidebar health footer; `/api/stats/daily` endpoint; Agents page added to dashboard |
+| **v1.9.3–v1.9.5** | RTP port allocator lock fix; live `/api/calls/active` endpoint + dashboard active-calls card; real system status checks in `/api/health` for ARI, MOH assets, and voicemail spool health |
 
 ### Planned
 

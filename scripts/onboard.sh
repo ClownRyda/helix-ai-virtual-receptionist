@@ -738,12 +738,9 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             sudo ufw allow 22/tcp    comment "SSH"         2>/dev/null || true
             sudo ufw allow 80/tcp    comment "HTTP/nginx"  2>/dev/null || true
             sudo ufw allow 443/tcp   comment "HTTPS/nginx" 2>/dev/null || true
-            sudo ufw allow 5060/udp  comment "SIP"         2>/dev/null || true
-            sudo ufw allow 5060/tcp  comment "SIP"         2>/dev/null || true
-            sudo ufw allow 10000:19999/udp comment "Asterisk RTP"    2>/dev/null || true
-            sudo ufw allow 20000:20100/udp comment "Helix Agent RTP" 2>/dev/null || true
             sudo ufw --force enable 2>/dev/null || true
-            log "UFW rules: SSH 22, nginx 80/443, SIP 5060, RTP 10000-19999/20000-20100."
+            bash "$REPO_ROOT/scripts/firewall.sh" "$LAN_SUBNET"
+            log "UFW rules: SSH 22, nginx 80/443 public; SIP/RTP restricted to ${LAN_SUBNET}."
             info "ARI (8088), Agent API (8000), Dashboard (3000) stay loopback — served via nginx."
         fi
     elif command_exists firewall-cmd; then
@@ -752,17 +749,17 @@ if $IS_LINUX && [[ "$DEPLOY_MODE" == "native" ]]; then
             sudo firewall-cmd --permanent --add-service=ssh
             sudo firewall-cmd --permanent --add-service=http
             sudo firewall-cmd --permanent --add-service=https
-            sudo firewall-cmd --permanent --add-port=5060/udp
-            sudo firewall-cmd --permanent --add-port=5060/tcp
-            sudo firewall-cmd --permanent --add-port=10000-19999/udp
-            sudo firewall-cmd --permanent --add-port=20000-20100/udp
+            sudo firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${LAN_SUBNET}' port protocol='udp' port='5060' accept"
+            sudo firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${LAN_SUBNET}' port protocol='tcp' port='5060' accept"
+            sudo firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${LAN_SUBNET}' port protocol='udp' port='10000-19999' accept"
+            sudo firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${LAN_SUBNET}' port protocol='udp' port='20000-20100' accept"
             sudo firewall-cmd --reload
-            log "firewalld rules: SSH, HTTP/HTTPS, SIP 5060, RTP 10000-19999/20000-20100."
+            log "firewalld rules: SSH/HTTP/HTTPS public; SIP/RTP restricted to ${LAN_SUBNET}."
             info "ARI (8088), Agent API (8000), Dashboard (3000) stay loopback — served via nginx."
         fi
     else
         info "No UFW or firewalld detected — skipping firewall setup."
-        warn "Manually open: 22/tcp, 80/tcp, 443/tcp, 5060/udp, 10000-19999/udp, 20000-20100/udp"
+        warn "Manually open 22/tcp, 80/tcp, 443/tcp publicly; restrict SIP/RTP to ${LAN_SUBNET}."
         warn "Do NOT open: 8088 (ARI), 8000 (agent API), 3000 (dashboard) — loopback only."
     fi
 fi
