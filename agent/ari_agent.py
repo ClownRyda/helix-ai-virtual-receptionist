@@ -1895,7 +1895,7 @@ class CallHandler:
             await asyncio.sleep(0.2)
 
     async def _create_media_session_for_channel(self, channel_id: str, label: str = "agent") -> AgentMediaSession:
-        rtp_port = _allocate_rtp_port()
+        rtp_port = await _allocate_rtp_port()
         rtp_sock = RTPSocket(settings.agent_rtp_host, rtp_port)
         bridge = await self.ari.create_bridge()
         if not bridge:
@@ -2763,7 +2763,7 @@ class CallHandler:
     # ── Media setup ───────────────────────────────────────────────────────────
 
     async def _setup_media(self):
-        self.rtp_port = _allocate_rtp_port()
+        self.rtp_port = await _allocate_rtp_port()
         self.rtp_sock = RTPSocket(settings.agent_rtp_host, self.rtp_port)
         log.info("_setup_media: RTP socket bound", port=self.rtp_port)
 
@@ -2945,6 +2945,38 @@ def get_shared_ari_client() -> "ARIClient | None":
     return _shared_ari_client
 
 
+# Module-level registry of in-progress calls.
+# Keyed by channel_id; value is (CallHandler, asyncio.Task).
+# Populated by run_ari_agent(); read by /api/calls/active.
+_active_calls: dict[str, tuple["CallHandler", "asyncio.Task"]] = {}
+
+
+def get_active_calls() -> list[dict]:
+    """Return a snapshot of currently active calls for the API."""
+    import datetime, time
+    result = []
+    for channel_id, (handler, task) in _active_calls.items():
+        if task.done():
+            continue
+        elapsed = 0
+        if handler.started_at:
+            try:
+                started = handler.started_at
+                if isinstance(started, str):
+                    started = datetime.datetime.fromisoformat(started)
+                elapsed = int((datetime.datetime.utcnow() - started).total_seconds())
+            except Exception:
+                pass
+        result.append({
+            "call_id":    handler.call_id,
+            "channel_id": channel_id,
+            "caller_id":  handler.caller_id,
+            "started_at": str(handler.started_at),
+            "elapsed_seconds": elapsed,
+        })
+    return result
+
+
 async def _cleanup_stale_external_media(ari: ARIClient):
     """Best-effort cleanup for orphaned ExternalMedia channels left behind by prior crashes/restarts."""
     try:
@@ -2971,11 +3003,16 @@ async def _cleanup_stale_external_media(ari: ARIClient):
     log.info("Startup ExternalMedia cleanup completed", found=len(stale), cleaned=cleaned)
 
 
-def _allocate_rtp_port() -> int:
-    for port in range(settings.agent_rtp_port_start, settings.agent_rtp_port_end, 2):
-        if port not in _port_pool:
-            _port_pool.add(port)
-            return port
+async def _allocate_rtp_port() -> int:
+    # _port_lock prevents two concurrent calls from claiming the same port.
+    # Without the lock two callers arriving simultaneously can both see the same
+    # port as unallocated and both add it to _port_pool — one call then gets
+    # silent one-way audio with no error in the logs.
+    async with _port_lock:
+        for port in range(settings.agent_rtp_port_start, settings.agent_rtp_port_end, 2):
+            if port not in _port_pool:
+                _port_pool.add(port)
+                return port
     raise RuntimeError("No RTP ports available")
 
 
@@ -3014,7 +3051,8 @@ async def run_ari_agent():
     )
 
     # channel_id → (CallHandler, asyncio.Task)
-    active_calls: dict[str, tuple[CallHandler, asyncio.Task]] = {}
+    global _active_calls
+    active_calls = _active_calls  # module-level dict shared with /api/calls/active
 
     log.info("Connecting to Asterisk ARI", url=ws_url)
 

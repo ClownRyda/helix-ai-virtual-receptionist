@@ -4,7 +4,75 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.9.2
+## [latest] → v1.9.5
+
+---
+
+## [v1.9.5] — 2026-04-21
+
+### Summary
+Extends `/api/health` with live ARI connectivity and MOH/voicemail sanity
+checks, and replaces the fully hardcoded System Status card in the dashboard
+with one that reflects actual runtime state. Also corrects two stale labels
+("Piper TTS" → live tts_engine value from health, version "v1.2" → live
+version field).
+
+### Changed
+- `agent/api.py` — `/api/health` now performs three lightweight checks at
+  request time: (1) HTTP GET to `ari/asterisk/info` with a 2s timeout to
+  verify ARI connectivity; (2) directory listing of `/var/lib/asterisk/moh`
+  to confirm at least one audio file is present; (3) `os.path.isdir` check
+  on `/var/spool/asterisk/voicemail`. Results are returned as a `checks` dict
+  with `ok` and `detail` fields. Overall `status` is `"ok"` / `"degraded"` /
+  `"error"`. Version field updated to `"1.9.5"`.
+- `dashboard/client/src/pages/Dashboard.tsx` — System Status card now reads
+  live check results from `/api/health` for ARI, MOH, and voicemail spool.
+  Each entry shows a live status dot and inline detail text on failure. TTS
+  label reads `health.tts_engine` instead of hardcoded "Piper TTS". Version
+  shows `health.version` instead of hardcoded "v1.2". Adds new "Active Calls"
+  card (from v1.9.4) below System Status.
+
+---
+
+## [v1.9.4] — 2026-04-21
+
+### Summary
+Wires the in-memory `active_calls` registry in the ARI agent runtime to the
+dashboard via a new `/api/calls/active` endpoint and a live-polling card on
+the Dashboard home. Callers appear within 5 seconds of pickup and their
+elapsed duration ticks up in real time using a per-row client-side timer.
+
+### Added
+- `agent/ari_agent.py` — `_active_calls` promoted from a local variable inside
+  `run_ari_agent()` to a module-level dict. `get_active_calls()` accessor
+  returns a snapshot list of `{call_id, channel_id, caller_id, started_at,
+  elapsed_seconds}` for all in-progress non-done tasks.
+- `agent/api.py` — `GET /api/calls/active` endpoint: imports and calls
+  `get_active_calls()`, returns the snapshot. No DB query; reads only
+  in-memory runtime state.
+- `dashboard/client/src/pages/Dashboard.tsx` — `ActiveCall` interface,
+  `useLiveElapsed` hook (ticks elapsed seconds every second via `setInterval`),
+  `ActiveCallRow` component, and a new "Active Calls" card below System Status
+  that polls `/api/calls/active` every 5 seconds. Shows "No active calls" when
+  idle; shows caller ID + live ticking duration for each in-progress call.
+
+---
+
+## [v1.9.3] — 2026-04-21
+
+### Summary
+`_port_lock` was declared as an `asyncio.Lock()` but `_allocate_rtp_port()`
+was a plain synchronous function that never acquired it. Two concurrent callers
+could both read the same RTP port as unallocated and both add it to `_port_pool`
+in the same event-loop tick, resulting in one-way or missing audio on one call
+with no error logged.
+
+### Fixed
+- `agent/ari_agent.py` — `_allocate_rtp_port()` converted from `def` to
+  `async def`. The pool scan and add are now wrapped in `async with _port_lock:`
+  so the read-check-add is atomic across all concurrent coroutines.
+- `agent/ari_agent.py` — Both call sites updated to `await _allocate_rtp_port()`
+  (lines previously inside `_setup_media()` at two code paths).
 
 ---
 
