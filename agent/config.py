@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     whisper_model: str = Field("base.en", env="WHISPER_MODEL")
     whisper_device: str = Field("cuda", env="WHISPER_DEVICE")
     whisper_compute_type: str = Field("float16", env="WHISPER_COMPUTE_TYPE")
+    whisper_beam_size: int = Field(1, env="WHISPER_BEAM_SIZE")
 
     # ── Ollama LLM ──────────────────────────────────────────────
     ollama_host: str = Field("http://localhost:11434", env="OLLAMA_HOST")

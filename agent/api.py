@@ -92,6 +92,7 @@ class ConfigPatch(BaseModel):
     agent_name: Optional[str] = None
     business_name: Optional[str] = None
     whisper_model: Optional[str] = None
+    whisper_beam_size: Optional[int] = None
     ollama_model: Optional[str] = None
     kokoro_voice_en: Optional[str] = None
     kokoro_voice_es: Optional[str] = None
@@ -766,6 +767,7 @@ async def get_config():
         "agent_name": settings.agent_name,
         "business_name": settings.business_name,
         "whisper_model": settings.whisper_model,
+        "whisper_beam_size": settings.whisper_beam_size,
         "ollama_model": settings.ollama_model,
         # TTS engine is Kokoro (replaced Piper in v1.6). Expose per-language voices.
         "kokoro_voice_en": settings.kokoro_voice_en,
@@ -819,6 +821,7 @@ async def patch_config(body: ConfigPatch):
         "agent_name": "AGENT_NAME",
         "business_name": "BUSINESS_NAME",
         "whisper_model": "WHISPER_MODEL",
+        "whisper_beam_size": "WHISPER_BEAM_SIZE",
         "ollama_model": "OLLAMA_MODEL",
         "kokoro_voice_en": "KOKORO_VOICE_EN",
         "kokoro_voice_es": "KOKORO_VOICE_ES",

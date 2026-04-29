@@ -34,6 +34,7 @@ const mockConfig = {
   agent_name: "Alex",
   business_name: "Helix AI",
   whisper_model: "base.en",
+  whisper_beam_size: 1,
   ollama_model: "llama3.1:8b",
   kokoro_voice_en: "af_heart",
   kokoro_voice_es: "ef_dora",

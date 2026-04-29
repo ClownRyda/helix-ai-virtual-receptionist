@@ -78,7 +78,7 @@ def transcribe_pcm(
 
     segments, info = model.transcribe(
         audio_np,
-        beam_size=5,
+        beam_size=settings.whisper_beam_size,
         language=language,           # None = multilingual auto-detect
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},

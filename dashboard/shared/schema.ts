@@ -106,6 +106,7 @@ export interface AgentConfig {
   agent_name: string;
   business_name: string;
   whisper_model: string;
+  whisper_beam_size: number;
   ollama_model: string;
   kokoro_voice_en: string;
   kokoro_voice_es: string;
