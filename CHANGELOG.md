@@ -715,10 +715,6 @@ and a silent voicemail misconfiguration (after-hours mode set to `voicemail` but
 
 ---
 
-## [latest] → v1.6.4
-
----
-
 ## [v1.6.4] — 2026-04-16
 
 ### Summary
@@ -764,10 +760,6 @@ end-to-end on a clean Ubuntu 24.04 server.
 
 ---
 
-## [latest] → v1.6.3
-
----
-
 ## [v1.6.3] — 2026-04-16
 
 ### Summary
@@ -796,10 +788,6 @@ Python version between the agent Dockerfile and the native installer.
 ### Changed
 - `docker/docker-compose.yml` — header comment rewritten to document public vs.
   loopback-only port layout clearly
-
----
-
-## [latest] → v1.6.2
 
 ---
 
@@ -838,10 +826,6 @@ Running `bash scripts/onboard.sh` on a fresh Ubuntu 24.04 server now produces a
 fully production-ready deployment: all services managed by systemd, public traffic
 through nginx, internal services loopback-only, secrets locked down, firewall
 correctly hardened.
-
----
-
-## [latest] → v1.6.1
 
 ---
 
@@ -920,10 +904,6 @@ process; logrotate and SQLite backups are automated.
   and battle-tested production use in VoIP environments.
 - **Agent not run as root**: dedicated `helix` system user with minimal
   permissions; Asterisk runs as `asterisk` user.
-
----
-
-## [latest] → v1.6
 
 ---
 
