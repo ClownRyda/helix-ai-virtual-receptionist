@@ -4,7 +4,185 @@ All versions are tagged in GitHub. Latest release is always `latest`.
 
 ---
 
-## [latest] → v1.9.5
+## [latest] → v2.0.5
+
+---
+
+## [v2.0.5] — 2026-04-29
+
+### Summary
+Adds a Docker healthcheck for the Python agent and makes the dashboard wait for
+the agent to become healthy before starting. This compose-only change is not
+deployed live by itself and takes effect on the next full `docker compose up`.
+
+### Changed
+- `docker/docker-compose.yml` — adds an agent healthcheck using
+  `curl -f http://localhost:8000/api/health`.
+- `docker/docker-compose.yml` — changes dashboard `depends_on` to require
+  `agent: condition: service_healthy`.
+
+---
+
+## [v2.0.4] — 2026-04-29
+
+### Summary
+Adds an operator-driven transfer control to the Dashboard active calls card and
+surfaces transfer-in-progress state from the backend so duplicate transfers are
+blocked while a redirect is underway.
+
+### Added
+- `agent/api.py` — `POST /api/calls/{call_id}/transfer` endpoint accepting an
+  `extension` body and invoking direct `PJSIP/{extension}` redirect logic.
+- `dashboard/client/src/pages/Dashboard.tsx` — per-call transfer input and
+  action button for active calls.
+
+### Changed
+- `agent/ari_agent.py` — exposes `transfer_in_progress` in active call
+  snapshots and adds `transfer_to_extension(...)` for direct dashboard-driven
+  redirects with correct handoff/event state handling.
+- `dashboard/client/src/pages/Dashboard.tsx` — disables transfer controls and
+  shows a spinner label while transfer is in progress.
+
+---
+
+## [v2.0.3] — 2026-04-29
+
+### Summary
+Replaces the transfer/handoff polling loop with `asyncio.Event` signaling so
+concurrent calls no longer wake every second waiting for handoff completion.
+
+### Changed
+- `agent/ari_agent.py` — introduces `handoff_complete` event state, uses it in
+  `_wait_for_handoff_completion()`, and sets/clears the event around direct and
+  translated handoff completion paths.
+
+---
+
+## [v2.0.2] — 2026-04-29
+
+### Summary
+Adds in-memory health history snapshots to the API and a dashboard status
+history row so operators can see flapping or intermittent service degradation
+instead of only the current point-in-time status.
+
+### Added
+- `agent/api.py` — module-level `deque(maxlen=60)` storing health snapshots.
+- `agent/api.py` — `GET /api/health/history` endpoint returning the last 60
+  status samples.
+- `dashboard/client/src/pages/Dashboard.tsx` — System Status history row with
+  the latest 20 samples rendered as colored dots with hover timestamps.
+
+### Changed
+- `agent/api.py` — `/api/health` now records each computed health snapshot.
+- `dashboard/shared/schema.ts` — adds `checks` on `HealthStatus` and a
+  `HealthHistoryEntry` type for history responses.
+
+---
+
+## [v2.0.1] — 2026-04-29
+
+### Summary
+Hardens `/api/calls/active` against concurrent ARI mutations by snapshotting
+the active call registry before iterating it.
+
+### Fixed
+- `agent/ari_agent.py` — `get_active_calls()` now iterates over a shallow copy
+  of `_active_calls` to avoid `RuntimeError: dictionary changed size during
+  iteration` under call churn.
+
+---
+
+## [v2.0.0] — 2026-04-29
+
+### Summary
+Surfaces the existing Vtiger CRM integration settings in `/api/config` and the
+dashboard so operators can enable, configure, test, and save CRM connectivity
+without SSH.
+
+### Added
+- `dashboard/client/src/pages/Settings.tsx` — editable CRM section with Vtiger
+  enable toggle, base URL, username, masked access key, default module
+  selector, save action, and inline connection test results.
+
+### Changed
+- `agent/api.py` — `GET /api/config`, `ConfigPatch`, and `PATCH /api/config`
+  now include `vtiger_enabled`, `vtiger_base_url`, `vtiger_username`,
+  `vtiger_access_key`, and `vtiger_default_module`.
+- `dashboard/shared/schema.ts` — `AgentConfig` now includes all Vtiger fields.
+
+---
+
+## [v1.9.9] — 2026-04-29
+
+### Summary
+Replaces hardcoded healthy sidebar indicators with live status derived from the
+existing `/api/health` polling response.
+
+### Changed
+- `dashboard/client/src/components/Sidebar.tsx` — service dots for ARI, hold
+  music, and voicemail now use live `checks.*.ok` values and expose hover
+  detail strings via `title`.
+- `dashboard/client/src/components/Sidebar.tsx` — top status pill now maps
+  `ok`/`degraded`/`error` to green/yellow/red styling instead of always showing
+  green.
+
+---
+
+## [v1.9.8] — 2026-04-29
+
+### Summary
+Adds a local MarianMT translation backend via CTranslate2 with automatic model
+download/cache, startup prewarm, fast local language detection, and silent
+fallback to Ollama when Marian is unavailable.
+
+### Added
+- `agent/llm/translate_engine.py` — MarianMT backend with lazy per-pair model
+  preparation under `/opt/helix/.cache/opus-mt/`, multi-step routing via
+  English when needed, and Ollama fallback on any backend failure.
+- `agent/main.py` — startup prewarm for the common `es → en` translation path.
+- `agent/config.py` / `agent/.env.example` — `TRANSLATION_BACKEND` setting.
+- `agent/requirements.txt` — `ctranslate2`, `sentencepiece`, `transformers`,
+  `huggingface-hub`, and `langdetect`.
+
+### Changed
+- `agent/llm/translate_engine.py` — language detection now prefers
+  `langdetect` instead of an Ollama prompt.
+
+---
+
+## [v1.9.7] — 2026-04-29
+
+### Summary
+Adds optional post-call email notifications with AI summary and transcript
+excerpt, triggered centrally when a call is finalized and guarded so each call
+can only queue one notification.
+
+### Added
+- `agent/ari_agent.py` — `_send_call_summary_email(...)` helper and
+  `_queue_call_summary_email(...)` one-shot trigger path using
+  `asyncio.create_task(...)`.
+- `agent/config.py` / `agent/.env.example` — `NOTIFY_EMAIL`, `SMTP_HOST`,
+  `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM`.
+
+### Changed
+- `agent/ari_agent.py` — `_save_call()` now acts as the common finalization hook
+  for notification dispatch across hangups, transfers, and voicemail paths.
+
+---
+
+## [v1.9.6] — 2026-04-29
+
+### Summary
+Fixes the config save path so the full dashboard/API settings surface can round
+trip through `PATCH /api/config`, and aligns the shared dashboard schema with
+the Kokoro TTS migration.
+
+### Fixed
+- `agent/api.py` — `ConfigPatch` now includes 13 previously missing config
+  fields, and `PATCH /api/config` now maps all 13 to the correct environment
+  keys instead of silently dropping them.
+- `dashboard/shared/schema.ts` — removes stale `piper_model`, adds Kokoro voice
+  fields, and includes the missing config properties returned by `/api/config`.
 
 ---
 
