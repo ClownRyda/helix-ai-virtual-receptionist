@@ -149,10 +149,25 @@ export interface Holiday {
 export interface HealthStatus {
   status: string;
   version: string;
+  checks?: {
+    ari: { ok: boolean; detail: string };
+    moh: { ok: boolean; detail: string };
+    voicemail: { ok: boolean; detail: string };
+  };
   features: {
     voicemail: boolean;
     call_summary: boolean;
     faq: boolean;
     dtmf: boolean;
+  };
+}
+
+export interface HealthHistoryEntry {
+  timestamp: string;
+  status: "ok" | "degraded" | "error";
+  checks: {
+    ari: { ok: boolean; detail: string };
+    moh: { ok: boolean; detail: string };
+    voicemail: { ok: boolean; detail: string };
   };
 }

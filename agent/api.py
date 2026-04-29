@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
 from typing import Optional, Literal
+from collections import deque
 from datetime import datetime, date
 import os
 import re
@@ -45,6 +46,7 @@ from integrations.vtiger import VtigerClient, normalize_phone_number
 
 app = FastAPI(title="Helix AI API", version="1.9.0")
 log = structlog.get_logger(__name__)
+_health_history = deque(maxlen=60)
 
 # Production: restrict to localhost. Set API_CORS_ORIGINS env var to
 # a comma-separated list of allowed origins if you need LAN access
@@ -1034,6 +1036,22 @@ async def health():
     checks_ok = ari_ok and moh_ok and vm_ok
     overall = "ok" if checks_ok else ("degraded" if ari_ok else "error")
 
+    checks = {
+        "ari": {"ok": ari_ok, "detail": ari_detail},
+        "moh": {"ok": moh_ok, "detail": moh_detail},
+        "voicemail": {"ok": vm_ok, "detail": vm_detail},
+    }
+    _health_history.append(
+        {
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": overall,
+            "checks": {
+                key: {"ok": value["ok"], "detail": value["detail"]}
+                for key, value in checks.items()
+            },
+        }
+    )
+
     return {
         "status": overall,
         "service": "helix-ai",
@@ -1051,9 +1069,10 @@ async def health():
             "faq": settings.faq_enabled,
             "dtmf": settings.dtmf_enabled,
         },
-        "checks": {
-            "ari":       {"ok": ari_ok,  "detail": ari_detail},
-            "moh":       {"ok": moh_ok,  "detail": moh_detail},
-            "voicemail": {"ok": vm_ok,   "detail": vm_detail},
-        },
+        "checks": checks,
     }
+
+
+@app.get("/api/health/history")
+async def health_history():
+    return list(_health_history)

@@ -9,7 +9,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, CalendarX, UsersRound, Megaphone, PhoneOutgoing,
 } from "lucide-react";
 import { fetchJSON } from "@/lib/queryClient";
-import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, Holiday, HumanAgent, Campaign } from "@shared/schema";
+import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, HealthHistoryEntry, Holiday, HumanAgent, Campaign } from "@shared/schema";
 import DispositionBadge from "@/components/DispositionBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -180,6 +180,12 @@ export default function Dashboard() {
   const { data: health } = useQuery<HealthStatus>({
     queryKey: ["/api/health"],
     queryFn: () => fetchJSON("/api/health"),
+    refetchInterval: 30_000,
+  });
+
+  const { data: healthHistory } = useQuery<HealthHistoryEntry[]>({
+    queryKey: ["/api/health/history"],
+    queryFn: () => fetchJSON("/api/health/history"),
     refetchInterval: 30_000,
   });
 
@@ -585,6 +591,29 @@ export default function Dashboard() {
                   <span className={`status-dot ${ok ? "online" : "offline"}`} />
                 </div>
               ))}
+              <div className="flex items-center justify-between px-5 py-2.5">
+                <span className="text-sm text-foreground">Status History</span>
+                <div className="flex items-center gap-1">
+                  {(healthHistory ?? []).slice(-20).map((entry, index) => {
+                    const dotClass =
+                      entry.status === "ok"
+                        ? "online"
+                        : entry.status === "degraded"
+                          ? "active"
+                          : "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.5)]";
+                    return (
+                      <span
+                        key={`${entry.timestamp}-${index}`}
+                        className={`status-dot ${dotClass}`}
+                        title={`${new Date(entry.timestamp).toLocaleString()} — ${entry.status}`}
+                      />
+                    );
+                  })}
+                  {!healthHistory?.length && (
+                    <span className="text-xs text-muted-foreground">No history</span>
+                  )}
+                </div>
+              </div>
               <div className="flex items-center justify-between px-5 py-2.5">
                 <span className="text-sm text-foreground">Version</span>
                 <span className="text-xs font-mono text-primary">{health?.version ?? "—"}</span>
