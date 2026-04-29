@@ -27,6 +27,7 @@ import json
 import os
 import re
 import socket
+import smtplib
 import struct
 import time
 import uuid
@@ -35,6 +36,7 @@ import aiohttp
 import structlog
 from dataclasses import dataclass
 from datetime import datetime, date
+from email.message import EmailMessage
 from sqlalchemy import select
 from zoneinfo import ZoneInfo
 
@@ -1020,6 +1022,7 @@ class CallHandler:
         self.agent_media_session: AgentMediaSession | None = None
         self.translation_task: asyncio.Task | None = None
         self.crm_lookup_task: asyncio.Task | None = None
+        self._email_sent: bool = False
         self.crm_normalized_phone: str = normalize_phone_number(caller_id)
         self.crm_provider: str = "vtiger"
         self.crm_module: str = ""
@@ -2806,10 +2809,12 @@ class CallHandler:
     # ── DB helpers ────────────────────────────────────────────────────────────
 
     async def _save_call(self, disposition: str, transferred_to: str | None = None,
-                          appointment_id: str | None = None):
+                          appointment_id: str | None = None,
+                          preserve_existing_disposition: bool = False):
         """Update the CallLog record with final state."""
         full_transcript = "\n".join(self.transcript_log)
         summary = await generate_call_summary(self.state, full_transcript)
+        final_disposition = disposition
 
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
@@ -2819,7 +2824,9 @@ class CallHandler:
                 cl.transcript = full_transcript
                 cl.intent = self.state.intent
                 cl.intent_detail = self.state.department
-                cl.disposition = disposition
+                if preserve_existing_disposition and cl.disposition:
+                    final_disposition = cl.disposition
+                cl.disposition = final_disposition
                 if transferred_to:
                     cl.transferred_to = transferred_to
                 if appointment_id:
@@ -2828,26 +2835,76 @@ class CallHandler:
                 if summary:
                     cl.summary = summary
                 await db.commit()
+                self._queue_call_summary_email(
+                    caller_id=cl.caller_id or self.caller_id,
+                    disposition=final_disposition,
+                    summary=summary or cl.summary or "",
+                    transcript=full_transcript,
+                )
 
     async def _finalize_transcript(self):
         """Save transcript + call path for calls that ended in the conversation loop."""
-        full_transcript = "\n".join(self.transcript_log)
-        summary = await generate_call_summary(self.state, full_transcript)
+        await self._save_call(disposition="hangup", preserve_existing_disposition=True)
 
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-            result = await db.execute(select(CallLog).where(CallLog.call_id == self.call_id))
-            cl = result.scalars().first()
-            if cl:
-                cl.transcript = full_transcript
-                cl.intent = self.state.intent
-                cl.intent_detail = self.state.department
-                if not cl.disposition:
-                    cl.disposition = "hangup"
-                cl.notes = self.call_path.to_json()
-                if summary:
-                    cl.summary = summary
-                await db.commit()
+    def _queue_call_summary_email(
+        self,
+        *,
+        caller_id: str,
+        disposition: str,
+        summary: str,
+        transcript: str,
+    ) -> None:
+        if self._email_sent or not settings.notify_email.strip():
+            return
+        try:
+            asyncio.create_task(
+                self._send_call_summary_email(
+                    call_id=self.call_id,
+                    caller_id=caller_id,
+                    disposition=disposition,
+                    summary=summary,
+                    transcript=transcript,
+                )
+            )
+            self._email_sent = True
+        except Exception as exc:
+            log.warning("Failed to schedule call summary email", call_id=self.call_id, error=str(exc))
+
+    async def _send_call_summary_email(
+        self,
+        call_id: str,
+        caller_id: str,
+        disposition: str,
+        summary: str,
+        transcript: str,
+    ) -> None:
+        try:
+            transcript_lines = [line for line in transcript.splitlines() if line.strip()]
+            transcript_excerpt = "\n".join(transcript_lines[:20]) or "(no transcript)"
+            summary_text = summary.strip() or "(no summary)"
+
+            message = EmailMessage()
+            message["Subject"] = f"[Helix] Call from {caller_id} — {disposition}"
+            message["From"] = settings.smtp_from.strip() or settings.notify_email.strip()
+            message["To"] = settings.notify_email.strip()
+            message.set_content(
+                f"Call ID: {call_id}\n"
+                f"Caller: {caller_id}\n"
+                f"Disposition: {disposition}\n\n"
+                f"Summary:\n{summary_text}\n\n"
+                f"Transcript (first 20 lines):\n{transcript_excerpt}\n"
+            )
+
+            def _send() -> None:
+                with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+                    if settings.smtp_user.strip():
+                        smtp.login(settings.smtp_user, settings.smtp_pass)
+                    smtp.send_message(message)
+
+            await asyncio.get_event_loop().run_in_executor(None, _send)
+            log.info("Call summary email sent", call_id=call_id, recipient=settings.notify_email.strip())
+        except Exception as exc:
+            log.warning("Call summary email failed", call_id=call_id, error=str(exc))
 
     # ── Teardown ──────────────────────────────────────────────────────────────
 
