@@ -89,19 +89,32 @@ class HolidayCreate(BaseModel):
 class ConfigPatch(BaseModel):
     agent_name: Optional[str] = None
     business_name: Optional[str] = None
+    whisper_model: Optional[str] = None
+    ollama_model: Optional[str] = None
+    kokoro_voice_en: Optional[str] = None
+    kokoro_voice_es: Optional[str] = None
+    kokoro_voice_fr: Optional[str] = None
+    kokoro_voice_it: Optional[str] = None
     business_hours_start: Optional[int] = None
     business_hours_end: Optional[int] = None
     business_timezone: Optional[str] = None
+    appointment_slot_minutes: Optional[int] = None
+    availability_lookahead_days: Optional[int] = None
+    google_calendar_id: Optional[str] = None
     after_hours_mode: Optional[Literal["voicemail", "callback", "schedule", "emergency"]] = None
     operator_extension: Optional[str] = None
     emergency_extension: Optional[str] = None
     max_retries: Optional[int] = None
+    silence_timeout_sec: Optional[int] = None
     dtmf_enabled: Optional[bool] = None
     dtmf_map: Optional[str] = None
     vip_callers: Optional[str] = None
     voicemail_enabled: Optional[bool] = None
+    voicemail_dir: Optional[str] = None
+    voicemail_transcribe: Optional[bool] = None
     call_summary_enabled: Optional[bool] = None
     faq_enabled: Optional[bool] = None
+    faq_file: Optional[str] = None
 
 
 class VoicemailStatusPatch(BaseModel):
@@ -767,19 +780,32 @@ async def patch_config(body: ConfigPatch):
     env_key_map = {
         "agent_name": "AGENT_NAME",
         "business_name": "BUSINESS_NAME",
+        "whisper_model": "WHISPER_MODEL",
+        "ollama_model": "OLLAMA_MODEL",
+        "kokoro_voice_en": "KOKORO_VOICE_EN",
+        "kokoro_voice_es": "KOKORO_VOICE_ES",
+        "kokoro_voice_fr": "KOKORO_VOICE_FR",
+        "kokoro_voice_it": "KOKORO_VOICE_IT",
         "business_hours_start": "BUSINESS_HOURS_START",
         "business_hours_end": "BUSINESS_HOURS_END",
         "business_timezone": "BUSINESS_TIMEZONE",
+        "appointment_slot_minutes": "APPOINTMENT_SLOT_MINUTES",
+        "availability_lookahead_days": "AVAILABILITY_LOOKAHEAD_DAYS",
+        "google_calendar_id": "GOOGLE_CALENDAR_ID",
         "after_hours_mode": "AFTER_HOURS_MODE",
         "operator_extension": "OPERATOR_EXTENSION",
         "emergency_extension": "EMERGENCY_EXTENSION",
         "max_retries": "MAX_RETRIES",
+        "silence_timeout_sec": "SILENCE_TIMEOUT_SEC",
         "dtmf_enabled": "DTMF_ENABLED",
         "dtmf_map": "DTMF_MAP",
         "vip_callers": "VIP_CALLERS",
         "voicemail_enabled": "VOICEMAIL_ENABLED",
+        "voicemail_dir": "VOICEMAIL_DIR",
+        "voicemail_transcribe": "VOICEMAIL_TRANSCRIBE",
         "call_summary_enabled": "CALL_SUMMARY_ENABLED",
         "faq_enabled": "FAQ_ENABLED",
+        "faq_file": "FAQ_FILE",
     }
 
     for field, value in updates.items():

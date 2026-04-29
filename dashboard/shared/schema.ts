@@ -107,7 +107,10 @@ export interface AgentConfig {
   business_name: string;
   whisper_model: string;
   ollama_model: string;
-  piper_model: string;
+  kokoro_voice_en: string;
+  kokoro_voice_es: string;
+  kokoro_voice_fr: string;
+  kokoro_voice_it: string;
   business_hours_start: number;
   business_hours_end: number;
   business_timezone: string;
@@ -124,6 +127,7 @@ export interface AgentConfig {
   dtmf_map: string;
   vip_callers: string;
   voicemail_enabled: boolean;
+  voicemail_dir: string;
   voicemail_transcribe: boolean;
   call_summary_enabled: boolean;
   faq_enabled: boolean;

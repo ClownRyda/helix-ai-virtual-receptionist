@@ -107,9 +107,9 @@ export default function Settings() {
 
           <ConfigGroup title="Text-to-Speech" icon={<Volume2 size={14} />}>
             <ConfigRow
-              label="Piper Voice"
-              value={config.piper_model}
-              description="Local neural TTS voice model"
+              label="Kokoro Voice (EN)"
+              value={config.kokoro_voice_en}
+              description="Primary English neural TTS voice"
             />
           </ConfigGroup>
 

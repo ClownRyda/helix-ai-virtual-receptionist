@@ -639,7 +639,7 @@ export default function Dashboard() {
               <InfoRow label="Agent name" value={config?.agent_name ?? "—"} />
               <InfoRow label="LLM" value={config?.ollama_model ?? "—"} mono />
               <InfoRow label="STT" value={config?.whisper_model ?? "—"} mono />
-              <InfoRow label="TTS (EN)" value={config?.piper_model ?? "—"} mono />
+              <InfoRow label="TTS (EN)" value={config?.kokoro_voice_en ?? "—"} mono />
               <InfoRow label="Max retries" value={config ? `${config.max_retries} tries` : "—"} />
               <InfoRow label="Silence timeout" value={config ? `${config.silence_timeout_sec}s` : "—"} />
             </div>
