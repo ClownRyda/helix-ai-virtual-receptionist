@@ -132,6 +132,11 @@ export interface AgentConfig {
   call_summary_enabled: boolean;
   faq_enabled: boolean;
   faq_file: string;
+  vtiger_enabled: boolean;
+  vtiger_base_url: string;
+  vtiger_username: string;
+  vtiger_access_key: string;
+  vtiger_default_module: "Contacts" | "Leads";
 }
 
 export interface Holiday {

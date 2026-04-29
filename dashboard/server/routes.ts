@@ -60,6 +60,11 @@ const mockConfig = {
   call_summary_enabled: false,
   faq_enabled: false,
   faq_file: "faq.txt",
+  vtiger_enabled: false,
+  vtiger_base_url: "http://127.0.0.1:8188",
+  vtiger_username: "admin",
+  vtiger_access_key: "",
+  vtiger_default_module: "Contacts",
 };
 
 const mockHolidays = [

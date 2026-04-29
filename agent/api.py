@@ -115,6 +115,11 @@ class ConfigPatch(BaseModel):
     call_summary_enabled: Optional[bool] = None
     faq_enabled: Optional[bool] = None
     faq_file: Optional[str] = None
+    vtiger_enabled: Optional[bool] = None
+    vtiger_base_url: Optional[str] = None
+    vtiger_username: Optional[str] = None
+    vtiger_access_key: Optional[str] = None
+    vtiger_default_module: Optional[Literal["Contacts", "Leads"]] = None
 
 
 class VoicemailStatusPatch(BaseModel):
@@ -760,6 +765,11 @@ async def get_config():
         "call_summary_enabled": settings.call_summary_enabled,
         "faq_enabled": settings.faq_enabled,
         "faq_file": settings.faq_file,
+        "vtiger_enabled": settings.vtiger_enabled,
+        "vtiger_base_url": settings.vtiger_base_url,
+        "vtiger_username": settings.vtiger_username,
+        "vtiger_access_key": settings.vtiger_access_key,
+        "vtiger_default_module": settings.vtiger_default_module,
     }
 
 
@@ -806,6 +816,11 @@ async def patch_config(body: ConfigPatch):
         "call_summary_enabled": "CALL_SUMMARY_ENABLED",
         "faq_enabled": "FAQ_ENABLED",
         "faq_file": "FAQ_FILE",
+        "vtiger_enabled": "VTIGER_ENABLED",
+        "vtiger_base_url": "VTIGER_BASE_URL",
+        "vtiger_username": "VTIGER_USERNAME",
+        "vtiger_access_key": "VTIGER_ACCESS_KEY",
+        "vtiger_default_module": "VTIGER_DEFAULT_MODULE",
     }
 
     for field, value in updates.items():
