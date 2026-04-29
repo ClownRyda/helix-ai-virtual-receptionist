@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Radio, Voicemail, UsersRound, Megaphone, PhoneOutgoing } from "lucide-react";
+import { Phone, LayoutDashboard, GitMerge, CalendarClock, Settings, Voicemail, UsersRound, Megaphone, PhoneOutgoing } from "lucide-react";
 import { fetchJSON } from "@/lib/queryClient";
 import type { HealthStatus } from "@shared/schema";
 
@@ -27,6 +27,24 @@ export default function Sidebar() {
 
   const version = (health as any)?.version ?? "…";
   const ttsEngine = (health as any)?.tts_engine ?? "TTS";
+  const overallStatus = (health as any)?.status ?? "degraded";
+  const overallDotClass =
+    overallStatus === "ok"
+      ? "online"
+      : overallStatus === "degraded"
+        ? "active"
+        : "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.5)]";
+  const overallTextClass =
+    overallStatus === "ok"
+      ? "text-emerald-400"
+      : overallStatus === "degraded"
+        ? "text-amber-400"
+        : "text-rose-400";
+  const services = [
+    { label: "Asterisk ARI", check: (health as any)?.checks?.ari },
+    { label: "Hold Music", check: (health as any)?.checks?.moh },
+    { label: "Voicemail", check: (health as any)?.checks?.voicemail },
+  ];
 
   return (
     <aside className="sidebar">
@@ -51,8 +69,8 @@ export default function Sidebar() {
 
       {/* Status pill */}
       <div className="px-5 py-3 border-b border-border">
-        <div className="live-indicator">
-          <span className="status-dot active" />
+        <div className={`live-indicator ${overallTextClass}`}>
+          <span className={`status-dot ${overallDotClass}`} />
           Agent Online
         </div>
       </div>
@@ -82,17 +100,21 @@ export default function Sidebar() {
       {/* Service health footer — version + TTS engine pulled from /api/health */}
       <div className="px-5 py-4 border-t border-border space-y-2">
         <div className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Services</div>
-        {[
-          { label: "Asterisk ARI", icon: Radio },
-          { label: "Ollama LLM",   icon: null },
-          { label: "Whisper STT",  icon: null },
-          { label: ttsEngine,      icon: null },
-        ].map(({ label }) => (
-          <div key={label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        {services.map(({ label, check }) => {
+          const dotClass =
+            check?.ok === true
+              ? "online"
+              : check?.ok === false
+                ? "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.5)]"
+                : "active";
+          return (
+          <div key={label} className="flex items-center gap-1.5 text-xs text-muted-foreground" title={check?.detail ?? ""}>
             <span className="flex-1">{label}</span>
-            <span className="status-dot online" />
+            <span className={`status-dot ${dotClass}`} />
           </div>
-        ))}
+          );
+        })}
+        <div className="pt-1 text-xs text-muted-foreground">{ttsEngine}</div>
         <div className="pt-2 text-xs text-muted-foreground/50 font-mono">v{version}</div>
       </div>
     </aside>
