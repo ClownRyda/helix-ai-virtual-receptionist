@@ -3012,7 +3012,8 @@ def get_active_calls() -> list[dict]:
     """Return a snapshot of currently active calls for the API."""
     import datetime, time
     result = []
-    for channel_id, (handler, task) in _active_calls.items():
+    snapshot = _active_calls.copy()
+    for channel_id, (handler, task) in snapshot.items():
         if task.done():
             continue
         elapsed = 0
