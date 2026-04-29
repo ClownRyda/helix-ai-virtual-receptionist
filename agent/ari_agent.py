@@ -2021,6 +2021,25 @@ class CallHandler:
     async def _wait_for_handoff_completion(self):
         await self.handoff_complete.wait()
 
+    async def transfer_to_extension(self, extension: str, reason: str = "dashboard_transfer"):
+        extension = (extension or "").strip()
+        if not extension:
+            raise ValueError("Extension is required")
+        if self.handoff_active and not self.handoff_complete.is_set():
+            raise RuntimeError("Transfer already in progress")
+
+        self.call_path.record("manual_transfer_requested", extension=extension, reason=reason)
+        self.handoff_complete.clear()
+        self.handoff_active = True
+        try:
+            await self.ari.redirect_channel(self.channel_id, f"PJSIP/{extension}")
+            await self._save_call(disposition="transferred", transferred_to=extension)
+            log.info("Manual transfer", call_id=self.call_id, extension=extension, reason=reason)
+        except Exception:
+            self.handoff_active = False
+            self.handoff_complete.set()
+            raise
+
     async def _route_to_human_agent(self, requested_queue: str | None = None, reason: str = "transfer") -> bool:
         caller_lang = self.state.caller_lang or "en"
         route = await self._select_agent_route(requested_queue, caller_lang)
@@ -3048,8 +3067,16 @@ def get_active_calls() -> list[dict]:
             "caller_id":  handler.caller_id,
             "started_at": str(handler.started_at),
             "elapsed_seconds": elapsed,
+            "transfer_in_progress": handler.handoff_active and not handler.handoff_complete.is_set(),
         })
     return result
+
+
+def get_active_call_handler(call_id: str) -> "CallHandler | None":
+    for handler, task in _active_calls.copy().values():
+        if not task.done() and handler.call_id == call_id:
+            return handler
+    return None
 
 
 async def _cleanup_stale_external_media(ari: ARIClient):

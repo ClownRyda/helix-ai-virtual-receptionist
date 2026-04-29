@@ -41,7 +41,7 @@ from routing.agents import (
 )
 from gcal.gcal import get_available_slots
 from config import settings
-from ari_agent import get_shared_ari_client, get_active_calls
+from ari_agent import get_shared_ari_client, get_active_call_handler, get_active_calls
 from integrations.vtiger import VtigerClient, normalize_phone_number
 
 app = FastAPI(title="Helix AI API", version="1.9.0")
@@ -169,6 +169,10 @@ class OutboundTestCallBody(BaseModel):
     context: Optional[str] = "helix-outbound"
 
 
+class CallTransferBody(BaseModel):
+    extension: str
+
+
 def _parse_target_list(raw: str) -> list[str]:
     try:
         parsed = json.loads(raw)
@@ -241,6 +245,28 @@ async def list_calls(
 async def get_active_calls_endpoint():
     """Returns in-progress calls from the ARI agent runtime (not the DB)."""
     return get_active_calls()
+
+
+@app.post("/api/calls/{call_id}/transfer")
+async def transfer_active_call(call_id: str, body: CallTransferBody):
+    handler = get_active_call_handler(call_id)
+    if not handler:
+        raise HTTPException(status_code=404, detail="Active call not found")
+    extension = (body.extension or "").strip()
+    if not extension:
+        raise HTTPException(status_code=400, detail="Extension is required")
+    if handler.handoff_active and not handler.handoff_complete.is_set():
+        raise HTTPException(status_code=409, detail="Transfer already in progress")
+    try:
+        await handler.transfer_to_extension(extension, reason="dashboard_transfer")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        log.error("Dashboard transfer failed", call_id=call_id, extension=extension, error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True, "call_id": call_id, "extension": extension}
 
 
 @app.get("/api/calls/{call_id}")

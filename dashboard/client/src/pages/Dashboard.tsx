@@ -1,17 +1,20 @@
 import React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, Tooltip, ResponsiveContainer, XAxis } from "recharts";
 import { Link } from "wouter";
 import {
   Phone, ArrowRight, CalendarClock, ArrowLeftRight, PhoneOff,
   Clock, GitMerge, Mic, Cpu, Volume2, Globe, ShieldCheck,
   Hash, Voicemail, FileText, HelpCircle, Building2,
-  CheckCircle2, XCircle, AlertTriangle, CalendarX, UsersRound, Megaphone, PhoneOutgoing,
+  CheckCircle2, XCircle, AlertTriangle, CalendarX, UsersRound, Megaphone, PhoneOutgoing, LoaderCircle,
 } from "lucide-react";
-import { fetchJSON } from "@/lib/queryClient";
+import { apiRequest, fetchJSON, queryClient } from "@/lib/queryClient";
 import type { CallStats, CallLog, AgentConfig, RoutingRule, Appointment, HealthStatus, HealthHistoryEntry, Holiday, HumanAgent, Campaign } from "@shared/schema";
 import DispositionBadge from "@/components/DispositionBadge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
 
 interface DailyStat { date: string; calls: number; }
 interface ActiveCall {
@@ -20,6 +23,7 @@ interface ActiveCall {
   caller_id: string;
   started_at: string;
   elapsed_seconds: number;
+  transfer_in_progress: boolean;
 }
 
 /** Ticks elapsed seconds every second for a single active call. */
@@ -112,16 +116,55 @@ function InfoRow({ label, value, mono = false }: { label: string; value: React.R
 
 
 function ActiveCallRow({ call }: { call: ActiveCall }) {
+  const { toast } = useToast();
+  const [extension, setExtension] = React.useState("");
   const elapsed = useLiveElapsed(call.elapsed_seconds, call.started_at);
+  const transferMutation = useMutation({
+    mutationFn: async () => apiRequest("POST", `/api/calls/${call.call_id}/transfer`, { extension: extension.trim() }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/calls/active"] });
+      toast({ title: "Transfer started", description: `Routing ${call.caller_id} to ${extension.trim()}` });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Transfer failed", description: error.message, variant: "destructive" });
+    },
+  });
+
   return (
-    <div className="flex items-center justify-between px-5 py-2.5">
-      <div className="flex items-center gap-2">
-        <span className="status-dot active" />
-        <span className="text-sm font-mono text-foreground">{call.caller_id}</span>
+    <div className="flex flex-col gap-3 px-5 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="status-dot active" />
+          <span className="text-sm font-mono text-foreground">{call.caller_id}</span>
+        </div>
+        <span className="text-xs font-mono text-muted-foreground tabular-nums">
+          {fmtElapsed(elapsed)}
+        </span>
       </div>
-      <span className="text-xs font-mono text-muted-foreground tabular-nums">
-        {fmtElapsed(elapsed)}
-      </span>
+      <div className="flex items-center gap-2">
+        <Input
+          placeholder="Extension"
+          value={extension}
+          onChange={(e) => setExtension(e.target.value)}
+          disabled={call.transfer_in_progress || transferMutation.isPending}
+          className="h-8 max-w-28 text-xs font-mono"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!extension.trim() || call.transfer_in_progress || transferMutation.isPending}
+          onClick={() => transferMutation.mutate()}
+        >
+          {call.transfer_in_progress ? (
+            <>
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              Transferring...
+            </>
+          ) : (
+            "Transfer"
+          )}
+        </Button>
+      </div>
     </div>
   );
 }
