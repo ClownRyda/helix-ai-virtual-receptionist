@@ -1016,6 +1016,8 @@ class CallHandler:
         self._pending_hidden_mode: str = ""
         self._pending_hidden_mode_lang: str = "en"
         self.handoff_active: bool = False
+        self.handoff_complete = asyncio.Event()
+        self.handoff_complete.set()
         self.selected_agent: AgentRoute | None = None
         self.selected_agent_profile_id: str = ""
         self.agent_leg_channel_id: str = ""
@@ -1876,6 +1878,8 @@ class CallHandler:
                 pass
             self.translation_task = None
         if not self.selected_agent_profile_id:
+            self.handoff_active = False
+            self.handoff_complete.set()
             return
         try:
             async with AsyncSessionLocal() as db:
@@ -1889,6 +1893,18 @@ class CallHandler:
             self.selected_agent_profile_id = ""
             self.agent_leg_channel_id = ""
             self.handoff_active = False
+            self.handoff_complete.set()
+
+    def _translation_handoff_done(self, task: asyncio.Task):
+        try:
+            if task.cancelled():
+                log.info("Translation handoff task cancelled", call_id=self.call_id)
+            elif task.exception():
+                log.warning("Translation handoff task ended with error", call_id=self.call_id, error=str(task.exception()))
+        except Exception as exc:
+            log.warning("Translation handoff completion callback failed", call_id=self.call_id, error=str(exc))
+        self.handoff_active = False
+        self.handoff_complete.set()
 
     async def _speak_to_media_session(self, session: AgentMediaSession, text: str, language: str = "en", voice_override: str = ""):
         loop = asyncio.get_event_loop()
@@ -2003,10 +2019,7 @@ class CallHandler:
             )
 
     async def _wait_for_handoff_completion(self):
-        while True:
-            if self.translation_task and self.translation_task.done():
-                break
-            await asyncio.sleep(1.0)
+        await self.handoff_complete.wait()
 
     async def _route_to_human_agent(self, requested_queue: str | None = None, reason: str = "transfer") -> bool:
         caller_lang = self.state.caller_lang or "en"
@@ -2052,6 +2065,7 @@ class CallHandler:
             await self._speak(unavailable.get(caller_lang, unavailable["en"]), language=caller_lang)
             return False
         self.agent_media_session = session
+        self.handoff_complete.clear()
         self.handoff_active = True
 
         if route.translation_required:
@@ -2064,6 +2078,7 @@ class CallHandler:
                     agent_lang=route.preferred_language,
                 ).run()
             )
+            self.translation_task.add_done_callback(self._translation_handoff_done)
             self.call_path.record(
                 "translated_agent_handoff",
                 extension=route.extension,
@@ -2094,6 +2109,8 @@ class CallHandler:
                 source=route.source,
                 reason=reason,
             )
+            self.handoff_active = False
+            self.handoff_complete.set()
 
         await self._save_call(disposition="transferred", transferred_to=route.extension)
         await self._wait_for_handoff_completion()
