@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     supported_languages: str = Field("en,es,fr,it,de,ro,he", env="SUPPORTED_LANGUAGES")
     auto_detect_language: bool = Field(True, env="AUTO_DETECT_LANGUAGE")
     whisper_model_multilingual: str = Field("base", env="WHISPER_MODEL_MULTILINGUAL")
+    translation_backend: Literal["marian", "ollama"] = Field("marian", env="TRANSLATION_BACKEND")
 
     # ── Google Calendar ─────────────────────────────────────────
     google_credentials_file: str = Field("credentials.json", env="GOOGLE_CREDENTIALS_FILE")

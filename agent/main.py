@@ -41,6 +41,13 @@ async def main():
     await asyncio.get_event_loop().run_in_executor(None, synthesize_pcm, "Hello.", "en")
     log.info("Kokoro TTS ready")
 
+    # Pre-warm the most common translation pair so the first Spanish caller
+    # does not pay the initial model download/convert cost on the live call.
+    log.info("Pre-warming translation backend (es->en)...")
+    from llm.translate_engine import prewarm_translation_pair
+    await prewarm_translation_pair("es", "en")
+    log.info("Translation backend ready")
+
     # Start FastAPI in background
     config = uvicorn.Config(
         app=app,

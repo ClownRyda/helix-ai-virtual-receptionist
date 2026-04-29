@@ -18,6 +18,11 @@ misaki[en]>=0.9.2    # phonemizer for EN, ES, FR, IT — required by Kokoro
 
 # LLM - Ollama Python client
 ollama>=0.2.0
+langdetect>=1.0.9
+sentencepiece>=0.2.0
+transformers>=4.41.0
+huggingface-hub>=0.23.0
+ctranslate2>=4.4.0
 
 # Google Calendar
 google-auth>=2.29.0
